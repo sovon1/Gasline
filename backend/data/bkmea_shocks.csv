@@ -1,0 +1,6 @@
+shock_id,event_name,date,national_supply_mmcfd,zone_psi_actual,zone_psi_required,dyeing_loss_pct,knitting_loss_pct,sewing_loss_pct,source_url
+1,Normal Operations,2026-06-01,2900,12.0,15.0,0.0,0.0,0.0,https://petrobangla.org.bd
+2,FSRU Terminal Failure,2026-07-21,2450,2.5,15.0,51.0,37.0,40.0,https://www.thedailystar.net/business/economy/news/gas-crisis-hits-rmg-3663211
+3,August Low-Supply Average,2026-08-15,2235,2.1,15.0,55.0,40.0,45.0,https://www.thedailystar.net/business/economy/news/gas-supply-lowest-decade-3689401
+4,BKMEA Crisis Survey Period,2026-09-01,2300,2.0,15.0,51.0,37.5,40.0,https://www.dailysun.com/post/768901/78-factories-shut-down-energy-crisis
+5,Summit LNG Maintenance,2026-11-04,2250,1.6,15.0,60.0,42.0,48.0,https://bdnews24.com/bangladesh/petrobangla-summit-lng-maintenance-nov-2026
