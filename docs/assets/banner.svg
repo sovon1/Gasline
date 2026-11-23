@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="GasLine — Energy-Shock Order-Rescue System for Bangladesh RMG Factories">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070B16"/>
+      <stop offset="55%" stop-color="#0D1528"/>
+      <stop offset="100%" stop-color="#111C2E"/>
+    </linearGradient>
+    <radialGradient id="amberGlow" cx="76%" cy="55%" r="32%">
+      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="emeraldGlow" cx="88%" cy="28%" r="28%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="telemetryGrid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#1E293B" stroke-width="0.75" opacity="0.55"/>
+    </pattern>
+    <linearGradient id="shockWave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.7"/>
+      <stop offset="48%" stop-color="#F59E0B" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#EF4444" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="rescueWave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="45%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="1200" height="300" rx="16" fill="url(#bgGrad)"/>
+  <rect width="1200" height="300" rx="16" fill="url(#telemetryGrid)"/>
+  <rect width="1200" height="300" rx="16" fill="url(#amberGlow)"/>
+  <rect width="1200" height="300" rx="16" fill="url(#emeraldGlow)"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="298.5" rx="15.5" fill="none" stroke="#1E293B" stroke-width="1.5"/>
+
+  <!-- Right-side SCADA Pressure Shock -> Rescue Trajectory Chart -->
+  <g transform="translate(740, 36)">
+    <rect x="0" y="0" width="420" height="228" rx="12" fill="#090F1E" fill-opacity="0.82" stroke="#1E293B" stroke-width="1.2"/>
+    <!-- Subtle Horizontal Reference Lines -->
+    <line x1="20" y1="54" x2="400" y2="54" stroke="#1E293B" stroke-dasharray="4 4" stroke-width="1"/>
+    <line x1="20" y1="114" x2="400" y2="114" stroke="#1E293B" stroke-dasharray="4 4" stroke-width="1"/>
+    <line x1="20" y1="174" x2="400" y2="174" stroke="#1E293B" stroke-dasharray="4 4" stroke-width="1"/>
+
+    <text x="22" y="28" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="1.2">SCADA TELEMETRY · 15 PSI REQ vs 2.1 PSI SHOCK</text>
+
+    <!-- Baseline Crash Path (Unmitigated Gas Shock) -->
+    <path d="M 24 62 C 85 62, 118 164, 178 168 C 232 172, 285 186, 392 192"
+          fill="none" stroke="url(#shockWave)" stroke-width="3" stroke-linecap="round" stroke-dasharray="7 5" opacity="0.8"/>
+
+    <!-- GasLine Rescued Trajectory -->
+    <path d="M 24 62 C 85 62, 118 164, 178 168 C 218 168, 250 96, 302 80 C 338 69, 368 66, 392 64"
+          fill="none" stroke="url(#rescueWave)" stroke-width="3.6" stroke-linecap="round"/>
+
+    <!-- Intervention Node Marker -->
+    <circle cx="178" cy="168" r="9" fill="#F59E0B" fill-opacity="0.22"/>
+    <circle cx="178" cy="168" r="4.5" fill="#F59E0B" stroke="#090F1E" stroke-width="1.5"/>
+
+    <!-- Saved Shipment Node Marker -->
+    <circle cx="392" cy="64" r="9" fill="#10B981" fill-opacity="0.24"/>
+    <circle cx="392" cy="64" r="4.5" fill="#10B981" stroke="#090F1E" stroke-width="1.5"/>
+
+    <!-- Labels inside Chart -->
+    <text x="26" y="49" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5">Normal: 12-15 PSI</text>
+    <text x="122" y="192" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5">Shock Hit -> Rescue Applied</text>
+    <text x="255" y="182" fill="#F87171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5">Missed Vessel ($6.65/kg Air)</text>
+    <text x="242" y="54" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600">Sea Shipment Saved</text>
+
+    <!-- Bottom Mini Metric Strip -->
+    <rect x="20" y="198" width="120" height="20" rx="5" fill="#111827" stroke="#1E293B"/>
+    <text x="80" y="211.5" text-anchor="middle" fill="#CBD5E1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10">MAE: 1.06d (-83.4%)</text>
+
+    <rect x="150" y="198" width="120" height="20" rx="5" fill="#111827" stroke="#1E293B"/>
+    <text x="210" y="211.5" text-anchor="middle" fill="#CBD5E1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10">Conformal: ±2.62d</text>
+
+    <rect x="280" y="198" width="120" height="20" rx="5" fill="#111827" stroke="#1E293B"/>
+    <text x="340" y="211.5" text-anchor="middle" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10">48/48 Tests Pass</text>
+  </g>
+
+  <!-- Left Hero Brand Block -->
+  <g transform="translate(52, 52)">
+    <!-- Emblem Icon -->
+    <rect x="0" y="2" width="52" height="52" rx="13" fill="#0F172A" stroke="#334155" stroke-width="1.5"/>
+    <path d="M 27 11 C 21 19, 17 24, 17 31 C 17 37, 21.5 41.5, 26 41.5 C 31.5 41.5, 35 37, 35 31 C 35 26, 31.5 21, 29.5 18.5 C 29 22, 27.5 24, 25.5 24 C 24 24, 23 22, 27 11 Z" fill="#F59E0B"/>
+    <path d="M 19 34 L 24 38 L 34 26" fill="none" stroke="#10B981" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Wordmark + Tag -->
+    <text x="68" y="42" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif" font-size="44" font-weight="800" letter-spacing="-1">GasLine</text>
+    <rect x="252" y="15" width="118" height="24" rx="12" fill="#10B981" fill-opacity="0.14" stroke="#10B981" stroke-opacity="0.45"/>
+    <text x="311" y="30.5" text-anchor="middle" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="600">v1.0 · OFFLINE</text>
+
+    <!-- Subtitle -->
+    <text x="2" y="88" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif" font-size="19" font-weight="600">
+      The Energy-Shock Order-Rescue System for Bangladesh&#39;s $39B RMG Sector
+    </text>
+    <text x="2" y="114" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif" font-size="14.5">
+      Predicts gas-crisis shipment delays weeks early and optimizes diesel, line-split &amp; batch rescues in BDT/USD.
+    </text>
+
+    <!-- Capability Pill Row -->
+    <g transform="translate(0, 146)">
+      <rect x="0" y="0" width="194" height="28" rx="7" fill="#111827" stroke="#334155"/>
+      <text x="97" y="18" text-anchor="middle" fill="#E2E8F0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">Cascaded HistGradientBoosting</text>
+
+      <rect x="204" y="0" width="150" height="28" rx="7" fill="#111827" stroke="#334155"/>
+      <text x="279" y="18" text-anchor="middle" fill="#FBBF24" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">90% Conformal Bounds</text>
+
+      <rect x="364" y="0" width="128" height="28" rx="7" fill="#111827" stroke="#334155"/>
+      <text x="428" y="18" text-anchor="middle" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">100% Offline CPU</text>
+
+      <rect x="502" y="0" width="144" height="28" rx="7" fill="#111827" stroke="#334155"/>
+      <text x="574" y="18" text-anchor="middle" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">NSTU WINTERFELL</text>
+    </g>
+  </g>
+</svg>
