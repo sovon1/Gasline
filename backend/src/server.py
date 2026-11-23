@@ -745,18 +745,22 @@ async def copilot_chat(req: CopilotChatRequest):
         if not match.empty:
             matched_order = match.iloc[0].to_dict()
             tools_called.append(f"get_order_risk(order_id='{target_order_id}')")
+            days_fallback = _safe_float(matched_order.get("days_late"), 0.0)
+            pred_days_val = round(_safe_float(matched_order.get("predicted_days_late"), days_fallback), 1)
+            exp_fallback = _safe_float(matched_order.get("total_exposure_usd"), 0.0)
+            exp_val = round(_safe_float(matched_order.get("simulated_exposure_usd"), exp_fallback), 2)
             structured_metrics["target_order"] = {
                 "order_id": target_order_id,
                 "buyer": matched_order.get("buyer"),
                 "product": matched_order.get("product"),
-                "quantity": matched_order.get("quantity"),
-                "weight_kg": matched_order.get("total_weight_kg"),
-                "predicted_days_late": matched_order.get("predicted_days_late", matched_order.get("days_late")),
+                "quantity": _safe_int(matched_order.get("quantity"), 0),
+                "weight_kg": _safe_float(matched_order.get("total_weight_kg"), 0.0),
+                "predicted_days_late": pred_days_val,
                 "conformal_interval_90": [
-                    max(0.0, round(float(matched_order.get("predicted_days_late", matched_order.get("days_late") or 0)) - 2.62, 1)),
-                    round(float(matched_order.get("predicted_days_late", matched_order.get("days_late") or 0)) + 2.62, 1)
+                    max(0.0, round(pred_days_val - 2.62, 1)),
+                    round(pred_days_val + 2.62, 1)
                 ],
-                "exposure_usd": matched_order.get("simulated_exposure_usd", matched_order.get("total_exposure_usd")),
+                "exposure_usd": exp_val,
             }
             action_chips.append({"label": f"🔍 Inspect {target_order_id}", "action": "OPEN_ORDER", "val": target_order_id})
 
@@ -764,15 +768,15 @@ async def copilot_chat(req: CopilotChatRequest):
     if any(k in msg_lower for k in ["rescue", "save", "diesel", "plan", "solution", "উদ্ধার", "বাঁচানো", "ডিজেল", "সমাধান"]):
         oid = target_order_id or "ORD-2026-001"
         tools_called.append(f"optimize_rescue(order_id='{oid}')")
-        rescue_res = get_rescue_plans(RescueRequest(order_id=oid, current_psi=target_psi or 1.6))
+        rescue_res = get_rescue_plan(RescueRequest(order_id=oid, current_psi=target_psi or 1.6))
         top_plan = rescue_res["rescue_plans"][0]
         structured_metrics["top_rescue_plan"] = {
             "order_id": oid,
             "plan_name": top_plan["plan_name"],
-            "intervention_cost_usd": top_plan["intervention_cost_usd"],
-            "avoided_air_freight_usd": top_plan["avoided_air_freight_usd"],
-            "net_savings_usd": top_plan["net_savings_usd"],
-            "risk_reduction_pct": top_plan["risk_reduction_pct"]
+            "intervention_cost_usd": _safe_float(top_plan.get("intervention_cost_usd", top_plan.get("implementation_cost_usd")), 0.0),
+            "avoided_air_freight_usd": _safe_float(top_plan.get("avoided_air_freight_usd", top_plan.get("avoided_loss_usd")), 0.0),
+            "net_savings_usd": _safe_float(top_plan.get("net_savings_usd", top_plan.get("net_saving_usd")), 0.0),
+            "risk_reduction_pct": _safe_float(top_plan.get("risk_reduction_pct"), 0.0)
         }
         action_chips.append({"label": f"⚡ Deploy {top_plan['plan_name']}", "action": "DEPLOY_RESCUE", "val": oid})
 
@@ -942,11 +946,12 @@ async def copilot_chat(req: CopilotChatRequest):
     active_mode = "deterministic_local_engine"
 
     sys_instruction = (
-        "You are GasLine Autonomous Plant Dispatcher, an industrial AI copilot for Bangladesh RMG factories during gas crises. "
-        "You speak fluent English and technical factory Bengali. You give concise, executive, numerical answers. "
-        "Always quote exact dollar amounts, PSI thresholds, and Conformal Prediction intervals (±2.62 days). "
-        f"User requested language: {lang}. Here is the live ground-truth tool data from factory SCADA: "
-        f"{json.dumps(structured_metrics)}"
+        "You are GasLine Autonomous Plant Dispatcher, a friendly, sharp industrial AI copilot for Bangladesh RMG factories during gas crises. "
+        "You speak fluent English and natural Bengali. "
+        "If the user sends a casual greeting or general conversation (e.g., 'hi', 'how are you?'), reply warmly and naturally first without dumping raw telemetry unless asked. "
+        "When the user asks about factory operations, orders, gas pressure, or rescue plans, give concise, executive, numerical answers quoting exact dollar amounts, PSI thresholds, and Conformal Prediction intervals (±2.62 days) from the live SCADA tool data below. "
+        f"User requested language: {lang}. Live SCADA tool data: "
+        f"{json.dumps(sanitize_record(structured_metrics))}"
     )
 
     # 8A. Google Gemini (1.5 Flash, 1.5 Pro, 2.0 Flash) with Multi-Turn History
@@ -1054,7 +1059,11 @@ async def copilot_chat(req: CopilotChatRequest):
                 parts.append(f"🧠 **GasLine AI আর্কিটেকচার**:\n- **মডেল এ (ফিজিক্স)**: {m['model_a']}\n- **মডেল বি (ঝুঁকি প্রিডিকশন)**: {m['model_b']}\n- **কনফরমাল প্রেডিকশন**: {m['conformal_prediction']}\n- **ব্যাখ্যাযোগ্যতা (SHAP)**: {m['explainability']}")
 
             if not parts:
-                parts.append(f"🤖 **GasLine SCADA AI সহকারী**: আপনার প্রশ্ন পেয়েছি। বর্তমানে কারখানার ৬০টি সক্রিয় লট ও এসসিএডিএ টেলিমেট্রি লাইভ রয়েছে। যেকোনো প্রেশার সিমুলেশন (যেমন 'simulate 10psi' বা '1.6 psi') অথবা অর্ডার রেফারেন্স লিখুন।")
+                is_greeting = any(g in msg_lower for g in ["hi", "hello", "hey", "how are you", "salam", "assalamu", "হ্যালো", "হাই", "কেমন আছো", "সালাম"])
+                if is_greeting:
+                    parts.append("👋 **হ্যালো! আমি ভালো আছি — GasLine ফ্লোর কোপাইলট রেডি!** আজকে কোন অর্ডার বা গ্যাস প্রেশার (যেমন `1.6 PSI` বা `ORD-2026-001`) চেক করে দেব?")
+                else:
+                    parts.append(f"🤖 **GasLine SCADA AI সহকারী**: আপনার প্রশ্ন পেয়েছি। বর্তমানে কারখানার {len(orders_df)}টি সক্রিয় লট ও এসসিএডিএ টেলিমেট্রি লাইভ রয়েছে। যেকোনো প্রেশার সিমুলেশন (যেমন 'simulate 10psi' বা '1.6 psi') অথবা অর্ডার রেফারেন্স লিখুন।")
             ai_reply = "\n\n".join(parts)
         else:
             parts = []
@@ -1084,7 +1093,11 @@ async def copilot_chat(req: CopilotChatRequest):
                 parts.append(f"🧠 **GasLine AI Architecture & Mathematical Rigor**:\n- **Model A (Physics)**: {m['model_a']}\n- **Model B (Risk Inference)**: {m['model_b']}\n- **Conformal Prediction**: {m['conformal_prediction']}\n- **Explainability (SHAP)**: {m['explainability']}")
 
             if not parts:
-                parts.append(f"🤖 **GasLine Autonomous Copilot**: Real-time SCADA telemetry linked to 60 active factory lots. Inquire about any pipeline pressure (e.g., 'simulate 10psi', '1.6 psi'), orders (Inditex, Zara, H&M), or port buffers.")
+                is_greeting = any(g in msg_lower for g in ["hi", "hello", "hey", "how are you", "salam", "assalamu", "good morning", "good evening"])
+                if is_greeting:
+                    parts.append("👋 **Hey! I'm doing great — GasLine Autonomous Plant Copilot is online and ready.** Want me to simulate a gas shock (like `1.6 PSI`), inspect `ORD-2026-001`, or rank diesel rescue options?")
+                else:
+                    parts.append(f"🤖 **GasLine Autonomous Copilot**: Real-time SCADA telemetry linked to {len(orders_df)} active factory lots. Inquire about any pipeline pressure (e.g., 'simulate 10psi', '1.6 psi'), orders (Inditex, Zara, H&M), or port buffers.")
             ai_reply = "\n\n".join(parts)
 
     return {
