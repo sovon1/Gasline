@@ -7,6 +7,7 @@ import {
   CalendarIcon,
   CheckCircleIcon,
   ClockIcon,
+  DownloadIcon,
   FlameIcon,
   PackageIcon,
   Share2Icon,
@@ -17,6 +18,7 @@ import { Language } from "../data/translations";
 import { OrderItem } from "./OrderLedger";
 import { useToast } from "./ToastProvider";
 import { API_BASE } from "../utils/api";
+import { buildQuotePdfBytes, downloadPdfBytes } from "../utils/auditPdf";
 import {
   addCalendarDays,
   diffCalendarDays,
@@ -672,6 +674,43 @@ export default function PromiseDateEngine({
     );
   };
 
+  const handleDownloadQuotePdf = () => {
+    if (!quoteResult) return;
+    const qs = quoteResult.quote_summary;
+    const reqEv = quoteResult.buyer_request_evaluation;
+    const todayIso = new Date().toISOString().split("T")[0];
+    const pdfBytes = buildQuotePdfBytes({
+      buyer: qs.buyer,
+      product: qs.product,
+      quantity: qs.quantity,
+      totalWeightKg: qs.total_weight_kg,
+      baseSmv: qs.base_smv,
+      gasIntensity: qs.gas_intensity,
+      fobUnitPriceUsd: qs.fob_unit_price_usd,
+      orderValueUsd: qs.order_value_usd,
+      orderStartDate: qs.order_start_date,
+      zoneName: qs.zone_name,
+      currentPsi: qs.current_psi,
+      shockMode: qs.shock_mode,
+      portBufferDays: qs.port_buffer_days,
+      wipQueueDays: qs.wip_queue_days,
+      requestedShipDate: reqEv.requested_ship_date,
+      requestedLeadDays: reqEv.requested_lead_days,
+      onTimeConfidencePct: reqEv.on_time_confidence_pct,
+      totalExposureUsd: reqEv.total_exposure_usd,
+      verdictLabel: reqEv.verdict_label,
+      isSafeToAccept: reqEv.verdict === "SAFE_TO_ACCEPT",
+      tiers: quoteResult.promise_tiers,
+      rescueOptions: quoteResult.rescue_backed_options,
+      cheapestViableRescue: quoteResult.cheapest_rescue_to_meet_buyer_date,
+      generatedDate: todayIso,
+    });
+    const slug = qs.buyer.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() || "PO";
+    const filename = `GasLine-Quote-${slug}-${reqEv.requested_lead_days}d.pdf`;
+    downloadPdfBytes(pdfBytes, filename);
+    toast.success("Quote Sheet PDF Downloaded", `Saved A4 quotation ${filename}.`);
+  };
+
   const active = quoteResult;
   const reqEval = active?.buyer_request_evaluation;
   const tiers = active?.promise_tiers;
@@ -1261,9 +1300,9 @@ export default function PromiseDateEngine({
               </div>
             </div>
 
-            {/* Action Bar: Commit Safe Date vs Commit Buyer Date + Rescue vs Copy Memo */}
-            <div className="flex flex-col justify-between gap-3 border-t border-line pt-4 sm:flex-row sm:items-center">
-              <div className="text-xs text-ink-2">
+            {/* Action Bar: Commit Safe Date vs Commit Buyer Date + Rescue vs Copy Memo / Quote PDF */}
+            <div className="flex flex-col justify-between gap-3 border-t border-line pt-4 lg:flex-row lg:items-center">
+              <div className="min-w-0 flex-1 text-xs text-ink-2">
                 {active.cheapest_rescue_to_meet_buyer_date && !isSafeToAccept ? (
                   <span>
                     <strong className="text-ink">Commercial Edge:</strong> Counter-offer{" "}
@@ -1283,14 +1322,23 @@ export default function PromiseDateEngine({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-2 lg:flex-nowrap">
                 <button
                   type="button"
                   onClick={handleCopyMemo}
-                  className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-2 text-xs font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+                  className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-surface px-2.5 py-2 text-xs font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-ink"
                 >
                   <Share2Icon className="h-3.5 w-3.5" />
-                  <span>Copy Quote Memo</span>
+                  <span>Copy Memo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadQuotePdf}
+                  className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-surface px-2.5 py-2 text-xs font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+                >
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                  <span>Quote PDF</span>
                 </button>
 
                 {!isSafeToAccept && (
@@ -1300,7 +1348,7 @@ export default function PromiseDateEngine({
                     onClick={() =>
                       commitAcceptedQuote(reqEval.requested_lead_days, reqEval.requested_ship_date, true)
                     }
-                    className="flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-400/15 px-3 py-2 text-xs font-semibold text-[var(--status-warning-text)] transition-colors hover:bg-amber-400/25 disabled:opacity-50"
+                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-400/50 bg-amber-400/15 px-3 py-2 text-xs font-semibold text-[var(--status-warning-text)] transition-colors hover:bg-amber-400/25 disabled:opacity-50"
                   >
                     <ZapIcon className="h-3.5 w-3.5 text-amber-500" />
                     <span>Accept Target Date &amp; Plan Rescue</span>
@@ -1310,7 +1358,7 @@ export default function PromiseDateEngine({
                 <button
                   type="submit"
                   disabled={isCommitting}
-                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                  className="flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-emerald-500 disabled:opacity-50"
                 >
                   <CalendarIcon className="h-3.5 w-3.5" />
                   <span>

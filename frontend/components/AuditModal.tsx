@@ -4,7 +4,13 @@ import React, { useEffect, useState } from "react";
 import ModalDialog from "./ModalDialog";
 import { OrderItem } from "./OrderLedger";
 import { useToast } from "./ToastProvider";
-import { FileTextIcon, FlameIcon, PrinterIcon, Share2Icon, ShieldCheckIcon, XIcon } from "./Icons";
+import { DownloadIcon, FileTextIcon, FlameIcon, PrinterIcon, Share2Icon, ShieldCheckIcon, XIcon } from "./Icons";
+import {
+  AuditReportPayload,
+  buildAuditPdfBytes,
+  buildAuditPrintHtml,
+  downloadPdfBytes,
+} from "../utils/auditPdf";
 
 interface AuditModalProps {
   order: OrderItem | null;
@@ -40,11 +46,74 @@ export default function AuditModal({ order, onClose }: AuditModalProps) {
     ? activeOrder.conformal_interval_90[1]
     : daysLate + 2.6;
 
+  const issuedDate = new Date().toISOString().split("T")[0];
+
+  const buildPayload = (): AuditReportPayload | null => {
+    if (!activeOrder) return null;
+    return {
+      orderId: activeOrder.order_id,
+      buyer: activeOrder.buyer,
+      product: activeOrder.product,
+      quantity: activeOrder.quantity,
+      promisedShipDate: activeOrder.promised_ship_date,
+      issuedDate,
+      currentPsi: activeOrder.current_psi ?? 2.1,
+      daysLate,
+      conformalLower,
+      conformalUpper,
+      dieselCo2Kg,
+      airFreightCo2Kg,
+      totalCrisisCo2Tons,
+    };
+  };
+
   const handleCopyLiveLink = async () => {
     if (!activeOrder) return;
     const reportUrl = `${window.location.origin}/?order=${activeOrder.order_id}&audit=GL-AUD-${activeOrder.order_id}`;
     await navigator.clipboard.writeText(reportUrl);
     toast.success("Buyer Audit Link Copied", `Permalink for GL-AUD-${activeOrder.order_id} copied to clipboard.`);
+  };
+
+  const handleDownloadPdf = () => {
+    const payload = buildPayload();
+    if (!payload) return;
+    const pdfBytes = buildAuditPdfBytes(payload);
+    downloadPdfBytes(pdfBytes, `GL-AUD-${payload.orderId}.pdf`);
+    toast.success("Print-Ready A4 PDF Downloaded", `Saved GL-AUD-${payload.orderId}.pdf`);
+  };
+
+  const handlePrintA4 = () => {
+    const payload = buildPayload();
+    if (!payload) return;
+    const printHtml = buildAuditPrintHtml(payload);
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      document.body.removeChild(iframe);
+      return;
+    }
+
+    doc.open();
+    doc.write(printHtml);
+    doc.close();
+
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+      }, 1500);
+    }, 250);
   };
 
   return (
@@ -55,43 +124,13 @@ export default function AuditModal({ order, onClose }: AuditModalProps) {
       maxWidthClass="max-w-3xl"
       ariaLabelledBy="audit-modal-title"
     >
-      <style jsx global>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          dialog.gasline-dialog::backdrop {
-            display: none !important;
-          }
-          #printable-audit-certificate,
-          #printable-audit-certificate * {
-            visibility: visible;
-          }
-          #printable-audit-certificate {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            margin: 0;
-            padding: 20px;
-            background: #ffffff !important;
-            color: #09090b !important;
-            box-shadow: none !important;
-            border: none !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
-
       {activeOrder && (
         <div
           id="printable-audit-certificate"
           className="flex max-h-[90dvh] flex-col overflow-hidden bg-surface text-ink"
         >
-          {/* Studio Header Toolbar (Hidden on print) */}
-          <div className="no-print flex shrink-0 items-center justify-between border-b border-line bg-surface-2/60 px-5 py-3.5">
+          {/* Studio Header Toolbar */}
+          <div className="flex shrink-0 items-center justify-between border-b border-line bg-surface-2/60 px-5 py-3.5">
             <div className="flex items-center gap-2">
               <FileTextIcon className="h-4 w-4 text-ink-2" />
               <h2 id="audit-modal-title" className="text-xs font-semibold uppercase tracking-wider text-ink">
@@ -136,7 +175,7 @@ export default function AuditModal({ order, onClose }: AuditModalProps) {
                     <div>
                       Document ID: <strong className="text-zinc-900">GL-AUD-{activeOrder.order_id}</strong>
                     </div>
-                    <div>Issued: {new Date().toISOString().split("T")[0]}</div>
+                    <div>Issued: {issuedDate}</div>
                     <div>
                       Status: <span className="font-bold text-emerald-600">Active Defense</span>
                     </div>
@@ -236,10 +275,10 @@ export default function AuditModal({ order, onClose }: AuditModalProps) {
             </div>
           </div>
 
-          {/* Modal Actions (Hidden on print) */}
-          <div className="no-print flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line bg-surface-2/60 px-5 py-3.5">
+          {/* Modal Actions */}
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line bg-surface-2/60 px-5 py-3.5">
             <span className="font-mono text-[11px] text-ink-muted">A4 Print-Ready Certification</span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleCopyLiveLink}
@@ -250,11 +289,19 @@ export default function AuditModal({ order, onClose }: AuditModalProps) {
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={handlePrintA4}
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-2 text-xs font-medium text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+              >
+                <PrinterIcon className="h-3.5 w-3.5 text-ink-muted" />
+                <span>Print A4</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadPdf}
                 className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-accent-fg shadow-xs transition-opacity hover:opacity-90"
               >
-                <PrinterIcon className="h-3.5 w-3.5" />
-                <span>Print / Save PDF</span>
+                <DownloadIcon className="h-3.5 w-3.5" />
+                <span>Download PDF</span>
               </button>
               <button
                 type="button"

@@ -1,0 +1,11 @@
+order_id,buyer,product,quantity,base_smv,lead_days,penalty_per_day_usd,gas_intensity
+LOT-2026-ZR11,Inditex / Zara,Heavy Fleece Pullover Hoodie,18500,24.5,14,1400,HIGH
+LOT-2026-HM12,H&M,Basic Crewneck T-Shirt,32000,12.5,24,850,LOW
+LOT-2026-MS13,Marks & Spencer,Denim Stone-Washed Jeans,14000,28.5,16,1100,EXTREME
+LOT-2026-PM14,Primark,Pique Cotton Polo Shirt,26000,16.5,28,750,MEDIUM
+LOT-2026-UQ15,Uniqlo,Jacquard Knit Sweater,11500,32.0,15,1300,HIGH
+LOT-2026-TG16,Target USA,Twill Chino Trousers,19000,21.0,22,950,MEDIUM
+LOT-2026-WM17,Walmart Global,Basic Crewneck T-Shirt,42000,12.5,19,1250,LOW
+LOT-2026-NX18,Next UK,Heavy Fleece Pullover Hoodie,9500,24.5,12,1050,HIGH
+LOT-2026-ZR19,Inditex / Zara,Denim Stone-Washed Jeans,21000,28.5,35,1400,EXTREME
+LOT-2026-HM20,H&M,Pique Cotton Polo Shirt,16000,16.5,45,850,MEDIUM
