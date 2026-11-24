@@ -5,6 +5,7 @@ import ModalDialog from "./ModalDialog";
 import { Language } from "../data/translations";
 import { useToast } from "./ToastProvider";
 import { BrainIcon, CheckCircleIcon, PlusIcon, ScanLineIcon, UploadCloudIcon, XIcon, ZapIcon } from "./Icons";
+import { API_BASE } from "../utils/api";
 
 interface EditableTicketFields {
   buyer: string;
@@ -147,7 +148,7 @@ export default function VisionScanModal({
     setImportSuccess(false);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/vision/scan-card", {
+      const res = await fetch(`${API_BASE}/api/vision/scan-card`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset_id: presetId }),
@@ -226,7 +227,7 @@ export default function VisionScanModal({
         penalty_per_day_usd: fields.penalty_per_day_usd,
       };
 
-      const res = await fetch("http://127.0.0.1:8000/api/orders", {
+      const res = await fetch(`${API_BASE}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(orderPayload),

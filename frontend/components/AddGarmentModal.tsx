@@ -15,6 +15,7 @@ import {
 } from "./Icons";
 import { Language, translations } from "../data/translations";
 import { useToast } from "./ToastProvider";
+import { API_BASE } from "../utils/api";
 
 interface AddGarmentModalProps {
   isOpen: boolean;
@@ -186,7 +187,7 @@ export default function AddGarmentModal({
     };
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/orders", {
+      const res = await fetch(`${API_BASE}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -313,7 +314,7 @@ LOT-2026-TG05,Target USA,Twill Chino Trousers,12000,21.0,14,950,MEDIUM`;
     setIsSubmitting(true);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/orders", {
+      const res = await fetch(`${API_BASE}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orders: bulkOrders }),

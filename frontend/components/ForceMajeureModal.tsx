@@ -5,6 +5,7 @@ import ModalDialog from "./ModalDialog";
 import { Language } from "../data/translations";
 import { useToast } from "./ToastProvider";
 import { CopyIcon, ExternalLinkIcon, MessageSquareIcon, PrinterIcon, ScaleIcon, XIcon } from "./Icons";
+import { API_BASE } from "../utils/api";
 
 interface ForceMajeureData {
   status: string;
@@ -50,7 +51,7 @@ export default function ForceMajeureModal({
     let isMounted = true;
     setLoading(true);
 
-    fetch("http://127.0.0.1:8000/api/force-majeure", {
+    fetch(`${API_BASE}/api/force-majeure`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

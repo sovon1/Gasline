@@ -788,7 +788,7 @@ def dispatch_alert(req: DispatchRequest):
     }
 
 # =====================================================================
-# FRONTIER AI EXTENSIONS: COPILOT, MULTIMODAL VISION & FORCE MAJEURE
+# FRONTIER EXTENSIONS: COPILOT, SHOPFLOOR SCAN & FORCE MAJEURE DOSSIER
 # =====================================================================
 
 class CopilotChatRequest(BaseModel):
@@ -1003,22 +1003,25 @@ async def copilot_chat(req: CopilotChatRequest):
         buyer_val = matched_order.get("buyer", "Global Sourcing") if matched_order else "Inditex (Zara)"
         structured_metrics["force_majeure"] = {
             "certificate_ref": f"BERC-FM-2026-T1123-8149",
-            "statutory_act": "Section 42, Bangladesh Energy Regulatory Commission (BERC) Act 2003",
+            "statutory_act": "Section 42, Bangladesh Energy Regulatory Commission (BERC) Act 2003 & CISG Art. 79 (Draft for Review)",
             "order_id": f_oid,
             "buyer": buyer_val,
             "recorded_psi": target_psi or 1.6,
-            "relief_status": "STATUTORY IMMUNITY ACTIVE"
+            "relief_status": "DRAFT EVIDENCE DOSSIER READY"
         }
-        action_chips.append({"label": "📄 Open A4 Certificate", "action": "OPEN_FORCE_MAJEURE", "val": f_oid})
+        action_chips.append({"label": "📄 Open A4 Dossier", "action": "OPEN_FORCE_MAJEURE", "val": f_oid})
 
     # 6. Architecture & Model Questions
     if any(k in msg_lower for k in ["who are you", "what are you", "model", "algorithm", "conformal", "shap", "architecture", "মডেল", "অ্যালগরিদম", "কে তুমি"]):
         tools_called.append("query_model_registry()")
+        _auc = model_metadata["metrics"]["auc"]
+        _acc = round(model_metadata["metrics"]["accuracy"] * 100, 2)
+        _q90 = model_metadata["conformal_q90"]
         structured_metrics["model_architecture"] = {
-            "model_a": "Physical Saturated Steam Enthalpy Curve + Ridge Calibration (R² 0.982)",
-            "model_b": "Gradient Boosted Decision Trees (AUC 0.9998, Acc 99.33%)",
-            "conformal_prediction": "Finite-sample valid 90% coverage interval [±2.62 days]",
-            "explainability": "TreeSHAP feature attributions on pressure deficit, lead slack, and SMV"
+            "model_a": "HistGradientBoostingRegressor x 3 (Dyeing, Knitting, Sewing) + BKMEA Steam Fallback",
+            "model_b": f"HistGradientBoosting Classifier & Regressor (AUC {_auc:.4f}, Acc {_acc:.2f}%)",
+            "conformal_prediction": f"Finite-sample valid 90% split-conformal interval [±{_q90:.2f} days]",
+            "explainability": "Deterministic marginal feature attributions on pressure deficit, lead slack, SMV, and batch load"
         }
 
     # 7. Construct Interactive Visual Cards Suite
@@ -1123,22 +1126,29 @@ async def copilot_chat(req: CopilotChatRequest):
                 "model_b": m["model_b"],
                 "conformal_prediction": m["conformal_prediction"],
                 "explainability": m["explainability"],
-                "evaluation": "AUC 0.9998 · Accuracy 99.33% · 90% Empirical Coverage"
+                "evaluation": f"AUC {model_metadata['metrics']['auc']:.4f} · Accuracy {model_metadata['metrics']['accuracy']*100:.2f}% · 90% Conformal Coverage"
             },
             "actions": []
         })
 
     # 8. Multi-Provider Frontier LLM Dispatcher (with Multi-Turn Context)
     provider = (req.provider or "").lower().strip()
-    provider_env_key = os.getenv(f"{provider.upper()}_API_KEY") if provider in ("gemini", "groq", "openai") else None
-    api_key_to_use = (
-        req.api_key
-        or provider_env_key
-        or os.getenv("GEMINI_API_KEY")
-        or os.getenv("GOOGLE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or os.getenv("GROQ_API_KEY")
-    )
+    if provider == "gemini":
+        api_key_to_use = req.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    elif provider == "groq":
+        api_key_to_use = req.api_key or os.getenv("GROQ_API_KEY")
+    elif provider == "openai":
+        api_key_to_use = req.api_key or os.getenv("OPENAI_API_KEY")
+    elif provider in ("ollama", "local"):
+        api_key_to_use = req.api_key or None
+    else:
+        api_key_to_use = (
+            req.api_key
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("GROQ_API_KEY")
+        )
     req_model = (req.model or "").strip()
 
     # Auto-detect provider if unspecified
@@ -1161,7 +1171,7 @@ async def copilot_chat(req: CopilotChatRequest):
         "You are GasLine Autonomous Plant Dispatcher, a friendly, sharp industrial AI copilot for Bangladesh RMG factories during gas crises. "
         "You speak fluent English and natural Bengali. "
         "If the user sends a casual greeting or general conversation (e.g., 'hi', 'how are you?'), reply warmly and naturally first without dumping raw telemetry unless asked. "
-        "When the user asks about factory operations, orders, gas pressure, or rescue plans, give concise, executive, numerical answers quoting exact dollar amounts, PSI thresholds, and Conformal Prediction intervals (±2.62 days) from the live SCADA tool data below. "
+        f"When the user asks about factory operations, orders, gas pressure, or rescue plans, give concise, executive, numerical answers quoting exact dollar amounts, PSI thresholds, and Conformal Prediction intervals (±{model_metadata['conformal_q90']:.2f} days) from the live SCADA tool data below. "
         f"User requested language: {lang}. Live SCADA tool data: "
         f"{json.dumps(sanitize_record(structured_metrics))}"
     )
@@ -1482,8 +1492,9 @@ def fetch_available_models(req: FetchModelsRequest):
 @app.post("/api/vision/scan-card")
 async def vision_scan_card(req: VisionScanRequest):
     """
-    Multimodal Vision AI endpoint that ingests photos of physical line planning whiteboards
-    or fabric dyeing lot cards and converts them into structured order parameters with live ML scoring.
+    Shopfloor Photo Preview & Tap-to-Confirm template digitization endpoint:
+    loads a structured factory whiteboard/lot-ticket preset for operator confirmation
+    and runs live ML Model B risk scoring (avoids fragile Bangla handwriting OCR).
     """
     presets = {
         "preset_1": {
@@ -1558,9 +1569,10 @@ async def vision_scan_card(req: VisionScanRequest):
 @app.post("/api/force-majeure")
 def generate_force_majeure_certificate(req: ForceMajeureRequest):
     """
-    Generates an official, legally enforceable Force Majeure Relief Certificate
-    citing Section 42 of Bangladesh Energy Regulatory Commission (BERC) Act 2003
-    with certified SCADA pressure logs and Conformal Prediction intervals.
+    Compiles a bilingual Factory Force Majeure Evidence Dossier & Draft Buyer Notice
+    referencing Section 42 of Bangladesh Energy Regulatory Commission (BERC) Act 2003
+    and CISG Article 79 with SCADA pressure logs and Conformal Prediction intervals
+    (draft for management and legal counsel review, not a regulator-issued certificate).
     """
     order = None
     if req.custom_order:
@@ -1586,7 +1598,8 @@ def generate_force_majeure_certificate(req: ForceMajeureRequest):
     days_late = _safe_float(raw_dl, 4.5)
 
     current_psi = float(req.custom_psi) if req.custom_psi is not None else _safe_float(order.get("current_psi"), 1.6)
-    conf_interval = [max(0.0, round(days_late - 2.62, 1)), round(days_late + 2.62, 1)]
+    q90_margin = float(model_metadata.get("conformal_q90", 5.38))
+    conf_interval = [max(0.0, round(days_late - q90_margin, 1)), round(days_late + q90_margin, 1)]
 
     # Carbon scope-1 diesel incurred to mitigate grid drop
     liters_diesel = int(qty * 0.18 * (days_late / 7.0))
@@ -1595,48 +1608,48 @@ def generate_force_majeure_certificate(req: ForceMajeureRequest):
     now = datetime.now()
     cert_ref = f"BERC-FM-2026-T{now.strftime('%m%d')}-{np.random.randint(1000, 9999)}"
 
-    english_doc = f"""FORMAL FORCE MAJEURE NOTICE & STATUTORY GRID FAILURE RELIEF
-Certificate Reference: {cert_ref}
-Issuance Date: {now.strftime('%d %B %Y')}
-Issuing Authority: SCADA Energy Monitoring Cell, {req.factory_name}
+    english_doc = f"""FACTORY FORCE MAJEURE EVIDENCE DOSSIER & DRAFT BUYER NOTICE (DRAFT FOR REVIEW)
+Dossier Reference: {cert_ref}
+Prepared Date: {now.strftime('%d %B %Y')}
+Originating Facility: SCADA Energy Monitoring Cell, {req.factory_name}
 
 TO: Supply Chain & Global Sourcing Directorate, {buyer}
-SUBJECT: Invocation of Force Majeure (Statutory Grid Pressure Collapse) for PO #{oid}
+SUBJECT: Draft Pre-Delay Force Majeure Evidence Summary (Grid Pressure Drop) for PO #{oid}
 
-1. STATUTORY JURISDICTION & GOVERNING LAW:
-This certification is issued under Section 42 of the Bangladesh Energy Regulatory Commission (BERC) Act 2003 (Act No. 13 of 2003) and Section 18 of the National Gas Supply Regulations. Under sovereign distribution failure, industrial off-takers are legally absolved of commercial delay liabilities resulting directly from pipeline pressure collapse below manufacturer operating baselines.
+1. SUPPORTING REGULATORY & CONTRACTUAL CONTEXT (FOR LEGAL REVIEW):
+This evidence dossier is compiled for factory management and buyer compliance review in the context of Section 42 of the Bangladesh Energy Regulatory Commission (BERC) Act 2003 (Act No. 13 of 2003) and CISG Article 79 reasonable-mitigation standards. It documents exogenous gas-grid pressure shortfalls below boiler operating baselines (not an official regulator-issued certificate).
 
-2. CERTIFIED PHYSICAL SCADA TELEMETRY:
-- Regulating Grid Authority: Titas Gas Transmission and Distribution Company Ltd. / Karnaphuli Gas System.
-- Minimum Rated Steam Operating Threshold: 10.0–15.0 PSI (Minimum 4.0 PSI for 10-bar saturated steam enthalpy).
-- Certified Manifold Operating Pressure: {current_psi:.1f} PSI (Recorded Deficit: -{round(max(0, 10.0 - current_psi), 1)} PSI).
-- Physical Process Impact: Dyeing steam generation curtailed by 79.8%; knitting and sewing throttled to emergency safety modes.
+2. RECORDED PHYSICAL SCADA TELEMETRY:
+- Distribution Grid: Titas Gas Transmission and Distribution Company Ltd. / Bakhrabad Gas System.
+- Rated Steam Operating Baseline: 10.0–15.0 PSI (Minimum 4.0 PSI for 10-bar saturated steam enthalpy).
+- Recorded Manifold Operating Pressure: {current_psi:.1f} PSI (Recorded Deficit: -{round(max(0, 10.0 - current_psi), 1)} PSI).
+- Physical Process Impact: Dyeing steam generation severely curtailed; knitting and sewing throttled accordingly.
 
 3. CONFORMAL PREDICTION AUDIT (FINITE-SAMPLE COVERAGE):
 - Order Reference: {oid} ({product}, {qty:,} units, {weight:,.1f} kg)
 - Point Delay Prediction: {days_late:.1f} calendar days.
 - 90% Conformal Prediction Bounds: [{conf_interval[0]} days to {conf_interval[1]} days].
-- Commercial Status: Relief is formally requested for a revised handover window of +{conf_interval[1]} days without commercial air-freight penalties or discounts ($6.65/kg freight exemption: ${round(weight * 6.65, 2):,}).
+- Commercial Request (Draft): Early schedule realignment of +{conf_interval[1]} days requested prior to vessel cut-off to avoid $6.65/kg air-freight exposure (${round(weight * 6.65, 2):,}).
 
 4. SCOPE-1 CARBON CRISIS MITIGATION EFFORT:
-To prevent total supply chain disruption, the manufacturer deployed dual-fuel diesel generation ({liters_diesel:,} liters of diesel; {co2_tons} tons Scope-1 CO2 emitted). This emergency expenditure is cited as proof of maximum mitigating effort under international commercial law.
+To protect delivery continuity, the facility deployed dual-fuel diesel generation ({liters_diesel:,} liters of diesel; {co2_tons} tons Scope-1 CO2 emitted) as documented evidence of good-faith mitigation.
 
-SIGNED & CERTIFIED ON THIS DAY:
+PREPARED FOR MANAGEMENT & LEGAL COUNSEL REVIEW:
 Director of Plant Operations & Energy SCADA Engineer
 {req.factory_name}"""
 
-    bangla_doc = f"""আইনি ফোর্স মেজার নোটিশ ও গ্যাস সরবরাহ বিপর্যয় সনদ
-সনদ নম্বর: {cert_ref}
+    bangla_doc = f"""কারখানা ফোর্স মেজার এভিডেন্স ডোসিয়ার ও খসড়া বায়ার নোটিশ (পর্যালোচনার খসড়া)
+ডোসিয়ার নম্বর: {cert_ref}
 তারিখ: {now.strftime('%d-%m-%Y')}
 প্রেরক: এনার্জি ও স্ক্যাডা কন্ট্রোল সেল, {req.factory_name}
 প্রাপক: সোর্সিং ও সাপ্লাই চেইন বিভাগ, {buyer}
 
-বিষয়: গ্যাস পাইপলাইন প্রেসার পতনের কারণে পিও #{oid}-এর ডেলিভারি সময়সীমা পুনর্বিন্যাস সংক্রান্ত আবেদন।
+বিষয়: গ্যাস পাইপলাইন প্রেসার পতনের কারণে পিও #{oid}-এর ডেলিভারি সময়সীমা পুনর্বিন্যাস সংক্রান্ত খসড়া প্রমাণপত্র।
 
-১. আইনি ধারা: বাংলাদেশ এনার্জি রেগুলেটরি কমিশন (বিইআরসি) আইন ২০০৩-এর ৪২ ধারা এবং জাতীয় গ্যাস সরবরাহ নীতিমালা অনুসারে রাষ্ট্রীয় গ্রিড বিপর্যয়ে শিল্প উৎপাদন ব্যাহত হলে তা অপরিবর্তনীয় ফোর্স মেজার হিসেবে গণ্য হবে।
-২. স্ক্যাডা রিডিং: কারখানার বয়লার ম্যানিফোল্ডে গ্যাস প্রেসার নেমেছে {current_psi:.1f} পিএসআই-এ (প্রয়োজনীয় ন্যূনতম ৪.০ পিএসআই-এর তুলনায় চরম ঘাটতি)।
-৩. মেশিন লার্নিং অডিট: কনফরমাল প্রেডিকশন অডিটে প্রত্যাশিত বিলম্ব {days_late:.1f} দিন (৯০% নিশ্চিত সীমা: {conf_interval[0]} থেকে {conf_interval[1]} দিন)। 
-৪. দাবি: এয়ার ফ্রেইট জরিমানা ($৬.৬৫/কেজি) মওকুফ সাপেক্ষে অনুমোদিত নতুন ডেলিভারি উইন্ডো প্রদানের অনুরোধ করা হলো।"""
+১. সহায়ক নিয়ন্ত্রক প্রেক্ষাপট: বাংলাদেশ এনার্জি রেগুলেটরি কমিশন (বিইআরসি) আইন ২০০৩-এর ৪২ ধারা এবং আন্তর্জাতিক বাণিজ্য চুক্তির (CISG Art. 79) আলোকে জাতীয় বিতরণ গ্রিডের প্রেসার পতনজনিত বিলম্বের কারিগরি প্রমাণ ব্যবস্থাপনা ও আইনি পর্যালোচনার জন্য সংকলিত হয়েছে।
+২. স্ক্যাডা রিডিং: কারখানার বয়লার ম্যানিফোল্ডে গ্যাস প্রেসার নেমেছে {current_psi:.1f} পিএসআই-এ (প্রয়োজনীয় ন্যূনতম ৪.০ পিএসআই-এর তুলনায় চরম ঘাটতি)।
+৩. মেশিন লার্নিং অডিট: কনফরমাল প্রেডিকশন অডিটে প্রত্যাশিত বিলম্ব {days_late:.1f} দিন (৯০% নিশ্চিত সীমা: {conf_interval[0]} থেকে {conf_interval[1]} দিন)।
+৪. খসড়া অনুরোধ: এয়ার ফ্রেইট ব্যয় ($৬.৬৫/কেজি) এড়াতে জাহাজীকরণের আগেই নতুন ডেলিভারি উইন্ডো সমন্বয়ের অনুরোধ করা হলো।"""
 
     return {
         "status": "success",

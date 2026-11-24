@@ -8,12 +8,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981.svg)](LICENSE)
 [![Python & ML](https://img.shields.io/badge/Backend-Python%203.12%20%7C%20FastAPI%20%7C%20scikit--learn-0F172A?logo=fastapi&logoColor=white)](backend/src/server.py)
 [![Next.js & React](https://img.shields.io/badge/Frontend-Next.js%2016%20%7C%20React%2019%20%7C%20TypeScript-0F172A?logo=nextdotjs&logoColor=white)](frontend/package.json)
-[![Backend Tests](https://img.shields.io/badge/Tests-48%2F48%20Passing-10B981.svg)](backend/src/test_backend.py)
+[![Backend Tests](https://img.shields.io/badge/Tests-56%2F56%20Passing-10B981.svg)](backend/src/test_backend.py)
 [![Offline First](https://img.shields.io/badge/Runtime-100%25%20Offline%20CPU-F59E0B.svg)](#60-second-local-quickstart)
 
-**Which export orders will the Bangladesh gas crisis kill — weeks before the ship date — and what is the cheapest rescue?**
+**Predicts which export orders the Bangladesh gas crisis will make late — and what ship date to safely promise before signing — then prices the cheapest rescue against air freight.**
 
-[Live Screenshots](#live-application-screenshots) · [System Architecture](#system-architecture) · [ML Benchmarks](#verified-model-evaluation--ablation) · [60s Quickstart](#60-second-local-quickstart) · [IEEE Research Paper](frontend/public/gasline_ieee_paper.pdf)
+[Final-Day Challenges](#final-day-judge-challenges-implemented) · [Live Screenshots](#live-application-screenshots) · [System Architecture](#system-architecture) · [ML Benchmarks](#verified-model-evaluation--ablation) · [60s Quickstart](#60-second-local-quickstart) · [IEEE Research Paper](frontend/public/gasline_ieee_paper.pdf)
 
 </div>
 
@@ -23,7 +23,20 @@
 
 Bangladesh's **$39B+ Ready-Made Garment (RMG) sector** generates **over 80% of national export earnings**, yet factories are currently throttled not by demand, but by natural gas pressure collapses. Boilers for wet dyeing and washing require **10–15 PSI**, while factories in Gazipur, Narayanganj, and Savar frequently receive **1–3 PSI**. Every factory manager knows gas pressure is low — what no merchandiser can see early enough is **which specific export lot will miss its vessel cut-off because of it**, and **whether diesel, overtime, line splitting, or night re-sequencing saves money vs. $6.00–$7.50/kg emergency air freight**.
 
-**GasLine** connects national gas shock telemetry (`mmcfd` & zone PSI), process-specific thermal physics (`dyeing → knitting → sewing`), and factory order books into one calibrated risk & rescue engine that runs **100% offline on an ordinary factory laptop CPU in milliseconds**.
+**GasLine** connects national gas shock telemetry (`mmcfd` & zone PSI), process-specific thermal physics (`dyeing → knitting → sewing`), and factory order books into one calibrated risk, quoting & rescue engine that runs **100% offline on an ordinary factory laptop CPU in milliseconds**.
+
+---
+
+## Final-Day Judge Challenges Implemented
+
+**Team `#28 · NSTU Winterfell`** — **Direction: *Promise date at quotation time***
+
+| Challenge | What Was Built & Verified | Key Surfaces & Code |
+|---|---|---|
+| **1. Pre-PO Safe Ship-Date Promise** <br/>*Let a merchandiser enter a new order quote, and have GasLine return the ship date it can safely promise before accepting.* | Promoted **`PROMISE`** (*Pre-PO Quoting Engine*) to **Tab 1** + added a **`Quote PO`** header button. A merchandiser enters buyer, garment style/SMV, quantity, FOB price, gas intensity, quotation date, buyer target date, CPA port buffer (`+2.5d`), and WIP queue load. `compute_quote_promise()` sweeps candidate lead horizons through **Model A → Model B** (`6,000` orders across `10–105` lead days) to return exact calendar dates (`YYYY-MM-DD`) at **50% Floor**, **85% Commercial**, **90% Conformal Safe (Recommended)**, and **97% Bulletproof**, an interactive SVG confidence curve, a **Pre-Signing Rescue FOB Table** (`+$USD/pc` markup to hold tight buyer dates), 1-click **Copy Memo** & **A4 Quote PDF** export, and direct PO commitment to the Live Order Book. | `POST /api/quote-promise` · [`compute_quote_promise()`](backend/src/optimizer.py) · [`PromiseDateEngine.tsx`](frontend/components/PromiseDateEngine.tsx) · [`plainDate.ts`](frontend/utils/plainDate.ts) · [`auditPdf.ts`](frontend/utils/auditPdf.ts) |
+| **2. Honest Rescue Ranking Under Unconfirmed Shocks** <br/>*Keep the rescue ranking honest when a shock event is announced with no confirmed duration or affected zone.* | Added `shock_mode="unconfirmed"` (`duration_confirmed=False`, `zone_confirmed=False`, duration min/max range, zone hit prior) across the Shock Console, Quoter, and Rescue Drawer (including a **3×3 Scenario Grid** tab). `evaluate_rescue_plans()` evaluates all 5 levers across a **9-scenario matrix** (`Zone Spared / Spillover / Direct Hit` × `Short / Medium / Prolonged Duration`) with duration-scaled diesel/overtime costs and sunk mobilization penalties — replacing single-point ROI with `net_saving_range_usd`, `cost_range_usd`, `max_regret_usd`, and **2-stage honest badges**: **`Execute Now (No-Regret)`** (`$0` Night Re-sequence, `$150` Line Split) vs. **`Hold Cash · Stage Trigger`** (`< 3.5 PSI for ≥ 24h` manifold verification before burning diesel/overtime cash). | [`evaluate_rescue_plans()`](backend/src/optimizer.py) · `POST /api/rescue` · `POST /api/simulate-shock` · [`ShockConsole.tsx`](frontend/components/ShockConsole.tsx) · [`RescueDrawer.tsx`](frontend/components/RescueDrawer.tsx) |
+
+*(Covered by automated backend contract & physics tests `test_49`–`test_56` in [`backend/src/test_backend.py`](backend/src/test_backend.py).)*
 
 ---
 
@@ -79,11 +92,11 @@ flowchart LR
     subgraph ModelB ["3. Model B · Risk & Uncertainty"]
         MB1["HistGradientBoostingClassifier<br/>P(Ships Late)"]
         MB2["HistGradientBoostingRegressor<br/>Expected Days Late"]
-        CF["90% Split-Conformal Bounds (±2.62d)<br/>+ Per-Order Risk Attribution"]
+        CF["90% Split-Conformal Bounds (±5.38d)<br/>+ Multi-Tier q85/q90/q95/q97 & Attribution"]
     end
 
-    subgraph Rescue ["4. Rescue Optimizer (OR)"]
-        OR["Evaluate 5 Operational Levers<br/>Re-score via Model B · Rank by Net ROI (USD/BDT)"]
+    subgraph Rescue ["4. Minimax-Regret Rescue Optimizer (OR)"]
+        OR["Evaluate 5 Levers × 9 Shock Scenarios<br/>No-Regret Now vs. Staged Manifold Trigger"]
     end
 
     subgraph Surfaces ["5. Action Surfaces"]
@@ -104,9 +117,9 @@ flowchart LR
 | Component | Technology | Epistemic Role & Design Honesty |
 |---|---|---|
 | **A. Process Capacity Forecaster** | `HistGradientBoostingRegressor` × 3 (`model_a_capacity.pkl`) | **True ML.** Learns non-linear dyeing, knitting, and sewing collapse curves from line PSI, 3-day rolling PSI, lagged PSI, mmcfd supply, and outage zone flags (with deterministic thermodynamic fallback). |
-| **B. Order Late-Risk & Delay Engine** | `HistGradientBoostingClassifier` + `Regressor` + Split Conformal | **True ML.** Integrates order scale, SMV, gas intensity, lead slack, and Model A window capacity across 11 engineered features, wrapped in calibrated **±2.62-day conformal intervals** and **marginal driver attribution**. |
+| **B. Order Late-Risk & Delay Engine** | `HistGradientBoostingClassifier` + `Regressor` + Split Conformal | **True ML.** Integrates order scale, SMV, gas intensity, lead slack, and Model A window capacity across 11 engineered features, wrapped in calibrated **multi-tier split-conformal intervals** (`q85=±4.19d`, `q90=±5.38d`, `q95=±7.59d`, `q97=±9.94d`) and **marginal driver attribution**. |
 | **B2. Buyer Exposure Ledger** | Group-by Aggregation of Model B | **Aggregation (Not Separate ML).** Rolls order-level risk up per buyer (`Inditex (Zara)`, `H&M`, `Marks & Spencer`, `Primark`) so merchandisers protect threatened relationships. |
-| **C. Rescue Optimizer** | Deterministic Operations Research (`optimizer.py`) | **Operations Research (Not ML).** Simulates 5 concrete interventions, re-queries Model B on each modified state, and ranks by `(avoided air freight + avoided delay penalty) − action cost`. |
+| **C. Rescue Optimizer & Quote Sweep** | Deterministic Operations Research (`optimizer.py`) | **Operations Research (Not ML).** Sweeps quotation horizons (`compute_quote_promise`) and scores 5 rescue interventions across confirmed states or a **9-scenario unconfirmed shock grid** (`Spared/Spillover/Direct × Short/Med/Long`), ranking by net savings & minimax regret. |
 | **Shopfloor Board Digitizer** | Photo Preview + Tap-to-Confirm 6-Field Template | **Honest Build-Now Design.** Explicitly avoids fragile Bangla handwriting OCR in favor of local board photo preview + editable 6-field confirmation scored live through Model B. |
 | **Force Majeure Preparation** | Printable Bilingual Evidence Dossier & Buyer Notice | **Documentation Support.** Compiles SCADA shock telemetry, conformal bounds, Scope-1 diesel mitigation logs, and BERC Act 2003 §42 / CISG Art. 79 context as a factory draft for review — **not** an official regulator certificate. |
 
@@ -114,15 +127,15 @@ flowchart LR
 
 ## Verified Model Evaluation & Ablation
 
-Evaluated across `5,000` seeded orders (`70%` train / `15%` conformal calibration / `15%` holdout test; `1,500` non-training holdout samples) reported directly by [`backend/models/model_metadata.json`](backend/models/model_metadata.json) and `GET /api/benchmark`:
+Evaluated across `6,000` seeded orders (`70%` train / `15%` conformal calibration / `15%` holdout test; `4,200` train / `900` calibration / `900` holdout test across `10–105` lead days) reported directly by [`backend/models/model_metadata.json`](backend/models/model_metadata.json) and `GET /api/benchmark`:
 
 | Benchmark | Result | Ablation Baseline Comparison |
 |---|---:|---|
-| **Late-Risk Classifier ROC-AUC** | **`0.9998`** | Non-linear energy + slack interactions |
-| **Classification Accuracy** | **`99.33%`** | Precision `99.48%` · Recall `99.22%` |
-| **Days-Late Regression MAE** | **`1.06 days`** | **−83.4% error reduction** vs baseline tabular GBDT (`6.37 days`) |
-| **90% Conformal Interval (`q90`)** | **`±2.62 days`** | **−74.1% tighter** than uncalibrated interval (`±10.10 days`) |
-| **Automated Test Suite** | **`48 / 48` OK** | 100% offline FastAPI `TestClient` suite (`backend/src/test_backend.py`) |
+| **Late-Risk Classifier ROC-AUC** | **`0.9991`** | Non-linear energy + slack interactions |
+| **Classification Accuracy** | **`98.67%`** | Precision `98.96%` · Recall `98.54%` |
+| **Days-Late Regression MAE** | **`2.12 days`** | **−66.7% error reduction** vs baseline tabular GBDT (`6.37 days`) |
+| **90% Conformal Interval (`q90`)** | **`±5.38 days`** | **−46.7% tighter** than uncalibrated interval (`±10.10 days`); multi-tier `q85=±4.19d`, `q95=±7.59d`, `q97=±9.94d` |
+| **Automated Test Suite** | **`56 / 56` OK** | 100% offline FastAPI `TestClient` suite (`backend/src/test_backend.py`) |
 
 > **Validation Scope & Honest Boundaries:** These accuracy and ablation figures are measured on a **calibrated synthetic holdout** anchored to the real **UCI Garment Productivity** dataset (`1,199` data rows, DOI `10.24432/C51S6D`), published **BKMEA crisis loss rates**, and cited **Petrobangla shock notices**. Real-factory generalization is unclaimed prior to our **Cumilla EPZ 1-month real Excel/ERP order-book pilot**. See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for the complete provenance audit.
 
@@ -196,7 +209,7 @@ npm run start
 # 1. Verify model imports & inference (~1s)
 python backend/src/test_verification.py
 
-# 2. Run all 48 automated FastAPI contract, physics & conformal tests (~25s, zero network)
+# 2. Run all 56 automated FastAPI contract, physics & conformal tests (~31s, zero network)
 python backend/src/test_backend.py
 
 # 3. Retrain Model A + Model B from shipped CSVs on CPU (~3s)
@@ -210,7 +223,7 @@ python backend/src/train_models.py
 ## Complete FastAPI Endpoint Reference
 
 <details>
-<summary>View all 15 API routes served at <code>http://127.0.0.1:8000</code></summary>
+<summary>View all 16 API routes served at <code>http://127.0.0.1:8000</code></summary>
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -219,8 +232,9 @@ python backend/src/train_models.py
 | `GET` | `/api/orders/{order_id}` | Case-insensitive lookup for a single export order lot |
 | `POST` | `/api/orders` | Adds single lot or batch CSV/JSON orders with live Model B inference |
 | `GET` | `/api/shocks` | Returns cited Petrobangla / BKMEA energy shock presets |
-| `POST` | `/api/simulate-shock` | Evaluates national supply (`mmcfd`) & custom zone PSI across the entire ledger |
-| `POST` | `/api/rescue` | Runs Model B counter-factual scoring over all 5 rescue actions for an order |
+| `POST` | `/api/simulate-shock` | Evaluates national supply (`mmcfd`), zone PSI, and confirmed vs. unconfirmed shock envelopes across the entire ledger |
+| `POST` | `/api/rescue` | Runs Model B counter-factual scoring over all 5 rescue actions (including 9-scenario minimax-regret mode under unconfirmed shocks) |
+| `POST` | `/api/quote-promise` | Forward-sweeps a pre-PO merchandiser quote through Model A/B + CPA buffer to return 50/85/90/97% calendar ship dates & FOB rescue pricing |
 | `GET` | `/api/port-buffer` | Returns Chattogram Port Authority (CPA) yard occupancy & gate-in buffer days |
 | `GET` | `/api/benchmark` | Returns ROC-AUC, Accuracy, MAE, conformal `q90`, and baseline ablation metrics |
 | `POST` | `/api/alert-text` | Generates structured bilingual (`EN` / `বাংলা`) merchandiser alert copy |
@@ -246,7 +260,7 @@ python backend/src/train_models.py
 
 ```text
 gasline/
-├── .github/workflows/ci.yml      # GitHub Actions: 48 backend tests, CPU retrain check & Next.js build
+├── .github/workflows/ci.yml      # GitHub Actions: 56 backend tests, CPU retrain check & Next.js build
 ├── backend/
 │   ├── data/
 │   │   ├── uci_garment_productivity.csv   # Real Bangladeshi factory baseline (1,199 rows, UCI DOI 10.24432/C51S6D)
@@ -257,13 +271,13 @@ gasline/
 │   │   ├── model_a_capacity.pkl           # Model A: 3 process capacity regressors (dyeing, knitting, sewing)
 │   │   ├── model_b_classifier.pkl         # Model B: P(late) HistGradientBoostingClassifier
 │   │   ├── model_b_regressor.pkl          # Model B: Expected days-late HistGradientBoostingRegressor
-│   │   └── model_metadata.json            # Feature manifest, conformal q90 (±2.62d) & evaluation metrics
+│   │   └── model_metadata.json            # Feature manifest, conformal quantiles (q85–q97) & evaluation metrics
 │   ├── src/
 │   │   ├── simulator.py                   # Seeded RMG energy-shock simulator anchored to UCI + BKMEA
 │   │   ├── train_models.py                # Reproducible 70/15/15 ML + split-conformal training script
-│   │   ├── optimizer.py                   # Model A/B inference, attribution & 5-plan ROI rescue engine
-│   │   ├── server.py                      # 15-endpoint FastAPI server with NaN safety & offline fallback
-│   │   ├── test_backend.py                # 48 comprehensive automated tests (contract, edge-case, scenarios)
+│   │   ├── optimizer.py                   # Model A/B inference, quote-promise sweep & 9-scenario minimax-regret rescue engine
+│   │   ├── server.py                      # 16-endpoint FastAPI server with NaN safety & offline fallback
+│   │   ├── test_backend.py                # 56 comprehensive automated tests (contract, edge-case, quote & unconfirmed shock scenarios)
 │   │   └── test_verification.py           # Fast sanity smoke check
 │   └── requirements.txt
 ├── frontend/

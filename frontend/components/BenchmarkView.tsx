@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { CheckCircleIcon, CheckIcon, FileTextIcon, ShieldCheckIcon, XIcon } from "./Icons";
 import { Language } from "../data/translations";
+import { API_BASE } from "../utils/api";
 
 interface BenchmarkViewProps {
   lang: Language;
@@ -14,7 +15,7 @@ export default function BenchmarkView({ lang }: BenchmarkViewProps) {
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/api/benchmark")
+    fetch(`${API_BASE}/api/benchmark`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data) {

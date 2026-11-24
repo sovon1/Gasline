@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ModalDialog from "./ModalDialog";
 import { Language } from "../data/translations";
+import { API_BASE } from "../utils/api";
 import {
   AlertTriangleIcon,
   AnchorIcon,
@@ -530,7 +531,7 @@ export default function AiCopilotModal({
   ) => {
     setIsFetchingModels(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/copilot/models", {
+      const res = await fetch(`${API_BASE}/api/copilot/models`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -704,7 +705,7 @@ export default function AiCopilotModal({
     setLoading(true);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/copilot/chat", {
+      const res = await fetch(`${API_BASE}/api/copilot/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
