@@ -2,6 +2,7 @@
 .gemini/
 .vscode/
 .idea/
+context.md
 
 # OS files
 .DS_Store
