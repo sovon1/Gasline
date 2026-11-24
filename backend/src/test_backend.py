@@ -728,6 +728,161 @@ class TestGasLineBackend(unittest.TestCase):
             self.assertGreater(len(data["models"]), 0)
             self.assertFalse(is_nan_or_inf(data))
 
+    # =========================================================================
+    # TIER 6: On-Site Judge Challenges — Quote Promise & Honest Unconfirmed Rescue (8 Tests)
+    # =========================================================================
+
+    def test_49_quote_promise_safe_vs_tight_horizon(self):
+        """Challenge 1: POST /api/quote-promise returns monotonic calendar ship-date tiers and flags tight quotes."""
+        tight_res = self.client.post("/api/quote-promise", json={
+            "buyer": "Inditex (Zara)",
+            "product": "Cotton Hoodie",
+            "quantity": 18000,
+            "order_start_date": "2026-11-24",
+            "buyer_requested_lead_days": 32,
+            "current_psi": 2.1,
+            "include_port_buffer": True,
+        })
+        self.assertEqual(tight_res.status_code, 200)
+        data = tight_res.json()
+        self.assertFalse(is_nan_or_inf(data))
+
+        tiers = data["promise_tiers"]
+        d50 = tiers["floor_50"]["lead_days"]
+        d85 = tiers["commercial_85"]["lead_days"]
+        d90 = tiers["recommended_90"]["lead_days"]
+        d97 = tiers["bulletproof_97"]["lead_days"]
+        self.assertLessEqual(d50, d85)
+        self.assertLess(d85, d90)
+        self.assertLess(d90, d97)
+        self.assertRegex(tiers["recommended_90"]["ship_date"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(data["buyer_request_evaluation"]["verdict"], "COUNTER_OR_PREPRICE_RESCUE")
+
+        # Generous lead time beyond safe_90 must evaluate SAFE_TO_ACCEPT
+        safe_res = self.client.post("/api/quote-promise", json={
+            "buyer": "Inditex (Zara)",
+            "product": "Cotton Hoodie",
+            "quantity": 18000,
+            "order_start_date": "2026-11-24",
+            "buyer_requested_lead_days": d90 + 3,
+            "current_psi": 2.1,
+        })
+        self.assertEqual(safe_res.status_code, 200)
+        self.assertEqual(safe_res.json()["buyer_request_evaluation"]["verdict"], "SAFE_TO_ACCEPT")
+
+    def test_50_quote_promise_pre_priced_rescue_fob_options(self):
+        """Challenge 1: Pre-signing rescue options price unit FOB add-on and unlock earlier safe ship dates."""
+        res = self.client.post("/api/quote-promise", json={
+            "buyer": "Marks & Spencer",
+            "product": "Denim Jeans",
+            "quantity": 15000,
+            "buyer_requested_lead_days": 42,
+            "current_psi": 1.8,
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        unrescued_90 = data["promise_tiers"]["recommended_90"]["lead_days"]
+        options = data["rescue_backed_options"]
+        self.assertGreaterEqual(len(options), 4)
+        diesel_opt = next(o for o in options if o["plan_id"] == "diesel_steam_boost")
+        self.assertLess(diesel_opt["rescued_safe_90_days"], unrescued_90)
+        self.assertGreater(diesel_opt["unit_fob_addon_usd"], 0.0)
+
+    def test_51_quote_promise_unconfirmed_shock_widens_safe_margin(self):
+        """Challenge 1 + 2: Unconfirmed shock honestly adds protective buffer to 90% and 97% promise dates."""
+        base_payload = {
+            "buyer": "H&M",
+            "product": "Polo Shirt",
+            "quantity": 14000,
+            "buyer_requested_lead_days": 40,
+            "current_psi": 2.1,
+        }
+        conf = self.client.post("/api/quote-promise", json={**base_payload, "shock_mode": "confirmed"}).json()
+        unc = self.client.post("/api/quote-promise", json={**base_payload, "shock_mode": "unconfirmed"}).json()
+        self.assertGreaterEqual(
+            unc["promise_tiers"]["bulletproof_97"]["lead_days"],
+            conf["promise_tiers"]["bulletproof_97"]["lead_days"],
+        )
+
+    def test_52_quote_promise_validation_400(self):
+        """Challenge 1: Invalid negative/zero quantity or lead days returns 400 Bad Request."""
+        r1 = self.client.post("/api/quote-promise", json={"quantity": 0})
+        self.assertEqual(r1.status_code, 400)
+        r2 = self.client.post("/api/quote-promise", json={"quantity": 5000, "buyer_requested_lead_days": -10})
+        self.assertEqual(r2.status_code, 400)
+
+    def test_53_honest_rescue_ranking_unconfirmed_duration_and_zone(self):
+        """Challenge 2: Unconfirmed duration & zone evaluates 9 scenarios, exposes downside regret, and stages high-spend plans."""
+        res = self.client.post("/api/rescue", json={
+            "order_id": "ORD-2026-001",
+            "current_psi": 1.6,
+            "shock_mode": "unconfirmed",
+            "duration_confirmed": False,
+            "zone_confirmed": False,
+            "duration_min_days": 2,
+            "duration_max_days": 21,
+            "zone_hit_prior": 0.55,
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(is_nan_or_inf(data))
+        self.assertEqual(data["shock_mode"], "unconfirmed")
+
+        unc = data["uncertainty_summary"]
+        self.assertTrue(unc["is_unconfirmed_shock"])
+        self.assertEqual(unc["scenarios_evaluated"], 9)
+        self.assertEqual(len(unc["scenario_matrix"]), 9)
+
+        plans = data["rescue_plans"]
+        # Top plan under ambiguity must be a low/no-regret immediate action, never blind high-burn cash lock-in
+        self.assertEqual(plans[0]["commitment_stage"], "NO_REGRET_NOW")
+        diesel = next(p for p in plans if p["plan_id"] == "diesel_steam_boost")
+        self.assertEqual(diesel["commitment_stage"], "CONDITIONAL_HOLD")
+        self.assertFalse(diesel["recommended"])
+        # Diesel saving range must show negative downside if shock misses zone (-$380 sunk mobilization)
+        self.assertLess(diesel["net_saving_range_usd"][0], 0.0)
+        self.assertGreater(diesel["cost_range_usd"][1], diesel["cost_range_usd"][0])
+
+    def test_54_simulate_shock_unconfirmed_envelope(self):
+        """Challenge 2: POST /api/simulate-shock with shock_mode=unconfirmed computes exposure envelope."""
+        res = self.client.post("/api/simulate-shock", json={
+            "shock_id": 5,
+            "shock_mode": "unconfirmed",
+            "duration_confirmed": False,
+            "zone_confirmed": False,
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(is_nan_or_inf(data))
+        self.assertEqual(data["shock_mode"], "unconfirmed")
+        rng = data["aggregate_impact"]["exposure_range_usd"]
+        self.assertEqual(len(rng), 2)
+        self.assertLess(rng[0], rng[1])
+
+    def test_55_alert_text_unconfirmed_honest_guardrail(self):
+        """Challenge 2: Bilingual dispatch alerts include staged manifold trigger guardrail under unconfirmed shock."""
+        res = self.client.post("/api/alert-text", json={
+            "order_id": "ORD-2026-001",
+            "shock_mode": "unconfirmed",
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("Honest Guardrail", data["english_message"])
+        self.assertIn("অনিশ্চিত", data["bangla_message"])
+
+    def test_56_copilot_quote_promise_and_unconfirmed_tools(self):
+        """Copilot executes compute_quote_promise and unconfirmed optimize_rescue offline."""
+        res = self.client.post("/api/copilot/chat", json={
+            "message": "Quote promise ship date for 16000 pcs in 35 days under unconfirmed shock duration",
+            "language": "en",
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(is_nan_or_inf(data))
+        joined_tools = " ".join(data["tools_called"])
+        self.assertIn("compute_quote_promise", joined_tools)
+        self.assertIn("shock_mode='unconfirmed'", joined_tools)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

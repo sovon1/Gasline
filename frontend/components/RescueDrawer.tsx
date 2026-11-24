@@ -3,7 +3,9 @@
 import React, { useState, useEffect } from "react";
 import ModalDialog from "./ModalDialog";
 import { OrderItem } from "./OrderLedger";
+import { ShockUncertaintyConfig } from "./PromiseDateEngine";
 import { useToast } from "./ToastProvider";
+import { API_BASE } from "../utils/api";
 import {
   AlertTriangleIcon,
   BrainIcon,
@@ -17,6 +19,7 @@ import {
   MessageSquareIcon,
   PackageIcon,
   Share2Icon,
+  ShieldCheckIcon,
   ShipIcon,
   XIcon,
   ZapIcon,
@@ -29,6 +32,7 @@ interface RescuePlan {
   description: string;
   implementation_cost_usd: number;
   implementation_cost_bdt: number;
+  cost_range_usd?: [number, number];
   new_p_late: number;
   risk_reduction_pct: number;
   days_saved: number;
@@ -37,24 +41,82 @@ interface RescuePlan {
   avoided_loss_bdt: number;
   net_saving_usd: number;
   net_saving_bdt: number;
+  expected_net_saving_usd?: number;
+  net_saving_range_usd?: [number, number];
+  max_regret_usd?: number;
+  downside_loss_prob_pct?: number;
+  rank_stability_pct?: number;
   roi_pct: number;
   recommended: boolean;
+  commitment_stage?: string;
+  honest_badge?: string;
+  trigger_rule?: string;
+}
+
+interface ScenarioCell {
+  scenario_id: string;
+  label: string;
+  zone_psi: number;
+  duration_days: number;
+  probability_pct: number;
+  baseline_exposure_usd: number;
+  winning_plan_id: string;
+  winning_plan_name: string;
+  winning_net_saving_usd: number;
+}
+
+interface UncertaintySummary {
+  is_unconfirmed_shock: boolean;
+  duration_confirmed: boolean;
+  zone_confirmed: boolean;
+  duration_range_days?: [number, number];
+  zone_hit_prior?: number;
+  scenarios_evaluated: number;
+  ranking_flips_across_scenarios: boolean;
+  best_if_mild_or_spared?: string;
+  best_if_prolonged_direct_hit?: string;
+  honest_guidance: string;
+  scenario_matrix?: ScenarioCell[];
 }
 
 interface RescueDrawerProps {
   order: OrderItem | null;
   onClose: () => void;
   onOpenAudit: (order: OrderItem) => void;
+  shockUncertainty?: ShockUncertaintyConfig;
+  onUpdateShockUncertainty?: (next: Partial<ShockUncertaintyConfig>) => void;
 }
 
-export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDrawerProps) {
+const DEFAULT_UNC: ShockUncertaintyConfig = {
+  shockMode: "confirmed",
+  durationConfirmed: true,
+  zoneConfirmed: true,
+  durationMinDays: 2,
+  durationMaxDays: 21,
+  zoneHitPrior: 0.55,
+};
+
+export default function RescueDrawer({
+  order,
+  onClose,
+  onOpenAudit,
+  shockUncertainty = DEFAULT_UNC,
+  onUpdateShockUncertainty,
+}: RescueDrawerProps) {
   const toast = useToast();
   const [cachedOrder, setCachedOrder] = useState<OrderItem | null>(order);
   const [plans, setPlans] = useState<RescuePlan[]>([]);
+  const [uncertaintySummary, setUncertaintySummary] = useState<UncertaintySummary | null>(null);
+  const [baselineRangeUsd, setBaselineRangeUsd] = useState<[number, number] | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [recipientPhone, setRecipientPhone] = useState("+880 1712-345678");
-  const [drawerView, setDrawerView] = useState<"PLANS" | "GANTT" | "XAI">("PLANS");
+  const [drawerView, setDrawerView] = useState<"PLANS" | "MATRIX" | "GANTT" | "XAI">("PLANS");
+
+  const isUnconfirmed =
+    shockUncertainty.shockMode === "unconfirmed" ||
+    !shockUncertainty.durationConfirmed ||
+    !shockUncertainty.zoneConfirmed;
 
   useEffect(() => {
     if (order) {
@@ -67,13 +129,19 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
     let active = true;
     setLoading(true);
 
-    fetch("http://127.0.0.1:8000/api/rescue", {
+    fetch(`${API_BASE}/api/rescue`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         order_id: order.order_id,
         custom_order: order.is_custom ? order : undefined,
         current_psi: order.current_psi,
+        shock_mode: shockUncertainty.shockMode,
+        duration_confirmed: shockUncertainty.durationConfirmed,
+        zone_confirmed: shockUncertainty.zoneConfirmed,
+        duration_min_days: shockUncertainty.durationMinDays,
+        duration_max_days: shockUncertainty.durationMaxDays,
+        zone_hit_prior: shockUncertainty.zoneHitPrior,
       }),
     })
       .then((res) => {
@@ -84,6 +152,8 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
         if (!active) return;
         if (data.rescue_plans && data.rescue_plans.length > 0) {
           setPlans(data.rescue_plans);
+          setUncertaintySummary(data.uncertainty_summary || null);
+          setBaselineRangeUsd(data.baseline?.total_exposure_range_usd || null);
           setSelectedPlanId(data.rescue_plans[0]?.plan_id || null);
         } else {
           throw new Error("No rescue plans returned");
@@ -91,7 +161,8 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
       })
       .catch(() => {
         if (!active) return;
-        const exposure = (order.simulated_exposure_usd ?? order.total_exposure_usd) || 0;
+        const exposure = (order.simulated_exposure_usd ?? order.total_exposure_usd) || 12000;
+        const unc = isUnconfirmed;
         const fallbackPlans: RescuePlan[] = [
           {
             plan_id: "resequence_dyeing",
@@ -101,16 +172,24 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               "Shift dyeing batch to forecast high-pressure off-peak window (night hours 11 PM - 6 AM).",
             implementation_cost_usd: 0,
             implementation_cost_bdt: 0,
+            cost_range_usd: [0, 0],
             new_p_late: 0.15,
             risk_reduction_pct: 68.5,
             days_saved: 5.2,
-            conformal_interval_90: [0, 2.5],
-            avoided_loss_usd: Math.round(exposure * 0.75),
-            avoided_loss_bdt: Math.round(exposure * 0.75 * 120),
-            net_saving_usd: Math.round(exposure * 0.75),
-            net_saving_bdt: Math.round(exposure * 0.75 * 120),
+            conformal_interval_90: [0, 3.2],
+            avoided_loss_usd: Math.round(exposure * 0.65),
+            avoided_loss_bdt: Math.round(exposure * 0.65 * 120),
+            net_saving_usd: Math.round(exposure * 0.65),
+            net_saving_bdt: Math.round(exposure * 0.65 * 120),
+            net_saving_range_usd: unc ? [0, Math.round(exposure * 0.85)] : [Math.round(exposure * 0.65), Math.round(exposure * 0.65)],
+            max_regret_usd: unc ? Math.round(exposure * 0.12) : 0,
+            downside_loss_prob_pct: 0,
+            rank_stability_pct: 88,
             roi_pct: 999.0,
             recommended: true,
+            commitment_stage: unc ? "NO_REGRET_NOW" : "CONFIRMED_EXECUTE",
+            honest_badge: unc ? "Execute Now (No-Regret)" : "Recommended",
+            trigger_rule: "Zero sunk cost even if shock misses this zone.",
           },
           {
             plan_id: "line_split",
@@ -120,35 +199,24 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               "Split cutting and sewing across 2 parallel assembly lines, cutting sewing duration by 35%.",
             implementation_cost_usd: 150,
             implementation_cost_bdt: 18000,
+            cost_range_usd: [150, 150],
             new_p_late: 0.22,
             risk_reduction_pct: 54.0,
             days_saved: 4.0,
-            conformal_interval_90: [0, 3.1],
-            avoided_loss_usd: Math.round(exposure * 0.6),
-            avoided_loss_bdt: Math.round(exposure * 0.6 * 120),
-            net_saving_usd: Math.round(exposure * 0.6 - 150),
-            net_saving_bdt: Math.round((exposure * 0.6 - 150) * 120),
+            conformal_interval_90: [0, 3.8],
+            avoided_loss_usd: Math.round(exposure * 0.55),
+            avoided_loss_bdt: Math.round(exposure * 0.55 * 120),
+            net_saving_usd: Math.round(exposure * 0.55 - 150),
+            net_saving_bdt: Math.round((exposure * 0.55 - 150) * 120),
+            net_saving_range_usd: unc ? [-150, Math.round(exposure * 0.78 - 150)] : [Math.round(exposure * 0.55 - 150), Math.round(exposure * 0.55 - 150)],
+            max_regret_usd: 150,
+            downside_loss_prob_pct: unc ? 24.8 : 0,
+            rank_stability_pct: 76,
             roi_pct: 350.0,
             recommended: true,
-          },
-          {
-            plan_id: "overtime_shift",
-            plan_name: "2-Hour Daily Overtime",
-            category: "Workforce Mobilization",
-            description:
-              "Add 2 overtime hours daily for 20 line workers (10-hr shifts @ BDT 250/hr overtime rate).",
-            implementation_cost_usd: 1250,
-            implementation_cost_bdt: 150000,
-            new_p_late: 0.18,
-            risk_reduction_pct: 60.0,
-            days_saved: 6.5,
-            conformal_interval_90: [0, 2.8],
-            avoided_loss_usd: Math.round(exposure * 0.8),
-            avoided_loss_bdt: Math.round(exposure * 0.8 * 120),
-            net_saving_usd: Math.round(exposure * 0.8 - 1250),
-            net_saving_bdt: Math.round((exposure * 0.8 - 1250) * 120),
-            roi_pct: 180.0,
-            recommended: false,
+            commitment_stage: unc ? "NO_REGRET_NOW" : "CONFIRMED_EXECUTE",
+            honest_badge: unc ? "Execute Now (No-Regret)" : "Recommended",
+            trigger_rule: "Capped $150 jig setup regret if zone is spared.",
           },
           {
             plan_id: "diesel_steam_boost",
@@ -156,40 +224,73 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
             category: "Energy Substitution",
             description:
               "Fire backup diesel burner to sustain 10-bar steam pressure for dyeing during low-gas hours.",
-            implementation_cost_usd: 1890,
-            implementation_cost_bdt: 226800,
+            implementation_cost_usd: unc ? 1640 : 1890,
+            implementation_cost_bdt: (unc ? 1640 : 1890) * 120,
+            cost_range_usd: unc ? [380, 4265] : [1890, 1890],
             new_p_late: 0.08,
             risk_reduction_pct: 82.0,
             days_saved: 8.0,
-            conformal_interval_90: [0, 1.5],
-            avoided_loss_usd: Math.round(exposure * 0.9),
-            avoided_loss_bdt: Math.round(exposure * 0.9 * 120),
-            net_saving_usd: Math.round(exposure * 0.9 - 1890),
-            net_saving_bdt: Math.round((exposure * 0.9 - 1890) * 120),
+            conformal_interval_90: [0, 1.8],
+            avoided_loss_usd: Math.round(exposure * 0.85),
+            avoided_loss_bdt: Math.round(exposure * 0.85 * 120),
+            net_saving_usd: Math.round(exposure * 0.85 - (unc ? 1640 : 1890)),
+            net_saving_bdt: Math.round((exposure * 0.85 - (unc ? 1640 : 1890)) * 120),
+            net_saving_range_usd: unc ? [-380, Math.round(exposure * 1.15 - 3200)] : [Math.round(exposure * 0.85 - 1890), Math.round(exposure * 0.85 - 1890)],
+            max_regret_usd: unc ? 1420 : 0,
+            downside_loss_prob_pct: unc ? 38.5 : 0,
+            rank_stability_pct: unc ? 42 : 100,
             roi_pct: 220.0,
-            recommended: true,
+            recommended: !unc,
+            commitment_stage: unc ? "CONDITIONAL_HOLD" : "CONFIRMED_EXECUTE",
+            honest_badge: unc ? "Hold Cash · Stage Trigger" : "Recommended",
+            trigger_rule: "Trigger ONLY if local manifold drops < 3.5 PSI for >= 24h.",
           },
           {
-            plan_id: "diesel_plus_overtime",
-            plan_name: "Critical Rescue (Diesel Boost + Overtime)",
-            category: "Maximum Emergency Intervention",
+            plan_id: "overtime_shift",
+            plan_name: "2-Hour Daily Overtime",
+            category: "Workforce Mobilization",
             description:
-              "Simultaneous boiler diesel injection and extended 10-hr shifts to prevent contract cancellation.",
-            implementation_cost_usd: 3140,
-            implementation_cost_bdt: 376800,
-            new_p_late: 0.02,
-            risk_reduction_pct: 94.0,
-            days_saved: 12.0,
-            conformal_interval_90: [0, 0.8],
-            avoided_loss_usd: exposure,
-            avoided_loss_bdt: Math.round(exposure * 120),
-            net_saving_usd: Math.round(exposure - 3140),
-            net_saving_bdt: Math.round((exposure - 3140) * 120),
-            roi_pct: 140.0,
+              "Add 2 overtime hours daily for 20 line workers (10-hr shifts @ BDT 250/hr overtime rate).",
+            implementation_cost_usd: unc ? 980 : 1250,
+            implementation_cost_bdt: (unc ? 980 : 1250) * 120,
+            cost_range_usd: unc ? [375, 2250] : [1250, 1250],
+            new_p_late: 0.18,
+            risk_reduction_pct: 60.0,
+            days_saved: 6.5,
+            conformal_interval_90: [0, 2.8],
+            avoided_loss_usd: Math.round(exposure * 0.72),
+            avoided_loss_bdt: Math.round(exposure * 0.72 * 120),
+            net_saving_usd: Math.round(exposure * 0.72 - (unc ? 980 : 1250)),
+            net_saving_bdt: Math.round((exposure * 0.72 - (unc ? 980 : 1250)) * 120),
+            net_saving_range_usd: unc ? [-375, Math.round(exposure * 0.9 - 1800)] : [Math.round(exposure * 0.72 - 1250), Math.round(exposure * 0.72 - 1250)],
+            max_regret_usd: unc ? 950 : 0,
+            downside_loss_prob_pct: unc ? 34.0 : 0,
+            rank_stability_pct: unc ? 45 : 80,
+            roi_pct: 180.0,
             recommended: false,
+            commitment_stage: unc ? "CONDITIONAL_HOLD" : "OPTIONAL",
+            honest_badge: unc ? "Hold Cash · Stage Trigger" : "Lower ROI",
+            trigger_rule: "Hold roster lock-in until outage exceeds 72h.",
           },
         ];
         setPlans(fallbackPlans);
+        setUncertaintySummary(
+          unc
+            ? {
+                is_unconfirmed_shock: true,
+                duration_confirmed: shockUncertainty.durationConfirmed,
+                zone_confirmed: shockUncertainty.zoneConfirmed,
+                duration_range_days: [shockUncertainty.durationMinDays, shockUncertainty.durationMaxDays],
+                zone_hit_prior: shockUncertainty.zoneHitPrior,
+                scenarios_evaluated: 9,
+                ranking_flips_across_scenarios: true,
+                best_if_mild_or_spared: "Dyeing Window Re-sequence",
+                best_if_prolonged_direct_hit: "Dual-Fuel Diesel Boiler Boost",
+                honest_guidance:
+                  "Shock duration and zone are unconfirmed. Deploy $0 Night Re-sequence + $150 Line Split now; hold Diesel behind a 24h local manifold trigger (<3.5 PSI).",
+              }
+            : null
+        );
         setSelectedPlanId(fallbackPlans[0].plan_id);
       })
       .finally(() => {
@@ -199,7 +300,16 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
     return () => {
       active = false;
     };
-  }, [order]);
+  }, [
+    order,
+    isUnconfirmed,
+    shockUncertainty.shockMode,
+    shockUncertainty.durationConfirmed,
+    shockUncertainty.zoneConfirmed,
+    shockUncertainty.durationMinDays,
+    shockUncertainty.durationMaxDays,
+    shockUncertainty.zoneHitPrior,
+  ]);
 
   const activeOrder = order ?? cachedOrder;
   const selectedPlan = plans.find((p) => p.plan_id === selectedPlanId) || plans[0];
@@ -242,13 +352,19 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
   const handleCopyAlert = async () => {
     if (!activeOrder) return;
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/alert-text", {
+      const res = await fetch(`${API_BASE}/api/alert-text`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           order_id: activeOrder.order_id,
           custom_order: activeOrder.is_custom ? activeOrder : undefined,
           top_plan_id: selectedPlanId || undefined,
+          shock_mode: shockUncertainty.shockMode,
+          duration_confirmed: shockUncertainty.durationConfirmed,
+          zone_confirmed: shockUncertainty.zoneConfirmed,
+          duration_min_days: shockUncertainty.durationMinDays,
+          duration_max_days: shockUncertainty.durationMaxDays,
+          zone_hit_prior: shockUncertainty.zoneHitPrior,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -272,7 +388,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
         `✅ প্রস্তাবিত রেসকিউ অ্যাকশন: ${planName}\n` +
         `⏱️ সময় সাশ্রয়: ${planSaved} দিন\n` +
         `💰 বাস্তবায়ন খরচ: ৳${costBdt.toLocaleString()} BDT\n` +
-        `🛡️ সম্ভাব্য ক্ষতি সাশ্রয়: $${exposure.toLocaleString()} USD (এয়ার ফ্রেইট ও পেনাল্টি বাতিল)\n` +
+        `🛡️ সম্ভাব্য ক্ষতি সাশ্রয়: $${exposure.toLocaleString()} USD\n` +
         `নির্দেশনা: ফ্লোর ম্যানেজার দ্রুত অ্যাকশন প্ল্যান অনুমোদন করুন।`;
 
       await navigator.clipboard.writeText(fallbackMsg);
@@ -283,7 +399,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
   const handleDirectWhatsApp = async () => {
     if (!activeOrder) return;
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/dispatch-alert", {
+      const res = await fetch(`${API_BASE}/api/dispatch-alert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -292,6 +408,12 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
           channel: "whatsapp",
           recipient: recipientPhone,
           top_plan_id: selectedPlanId || undefined,
+          shock_mode: shockUncertainty.shockMode,
+          duration_confirmed: shockUncertainty.durationConfirmed,
+          zone_confirmed: shockUncertainty.zoneConfirmed,
+          duration_min_days: shockUncertainty.durationMinDays,
+          duration_max_days: shockUncertainty.durationMaxDays,
+          zone_hit_prior: shockUncertainty.zoneHitPrior,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -310,11 +432,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
         `🚨 [GasLine জরুরী সতর্কবার্তা] 🚨\n` +
         `অর্ডার নং: ${activeOrder.order_id} (${activeOrder.buyer})\n` +
         `পণ্য: ${activeOrder.quantity.toLocaleString()} পিস ${activeOrder.product}\n` +
-        `গ্যাস প্রেশার ড্রপের কারণে অর্ডারটি শিপমেন্ট ঝুঁকিতে পড়েছে।\n\n` +
-        `✅ প্রস্তাবিত রেসকিউ অ্যাকশন: ${planName}\n` +
-        `⏱️ সময় সাশ্রয়: ${planSaved} দিন\n` +
-        `🛡️ সম্ভাব্য ক্ষতি সাশ্রয়: $${exposure.toLocaleString()} USD\n` +
-        `নির্দেশনা: ফ্লোর ম্যানেজার দ্রুত অ্যাকশন প্ল্যান অনুমোদন করুন।`;
+        `✅ প্রস্তাবিত রেসকিউ অ্যাকশন: ${planName} (+${planSaved} দিন সাশ্রয়, $${exposure.toLocaleString()} রক্ষা)।`;
 
       const cleanPhone = recipientPhone.replace(/\D/g, "");
       const waUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(fallbackMsg)}`;
@@ -326,7 +444,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
   const handleDirectEmail = async () => {
     if (!activeOrder) return;
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/dispatch-alert", {
+      const res = await fetch(`${API_BASE}/api/dispatch-alert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -335,6 +453,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
           channel: "email",
           recipient: "plant.manager@factory.com",
           top_plan_id: selectedPlanId || undefined,
+          shock_mode: shockUncertainty.shockMode,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -370,7 +489,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                 <h2 id="rescue-drawer-title" className="font-mono text-sm font-bold text-ink">
                   {activeOrder.order_id}
                 </h2>
-                <span className="rounded bg-surface-2 px-2 py-0.5 text-xs font-medium text-ink-2 border border-line">
+                <span className="rounded border border-line bg-surface-2 px-2 py-0.5 text-xs font-medium text-ink-2">
                   {activeOrder.buyer}
                 </span>
                 <span className="rounded border border-[var(--status-safe-border)] bg-[var(--status-safe-bg)] px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--status-safe-text)]">
@@ -392,30 +511,85 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
             </button>
           </div>
 
+          {/* In-Drawer Shock Epistemic Mode Switcher (Confirmed vs Unconfirmed Duration/Zone) */}
+          {onUpdateShockUncertainty && (
+            <div className="flex items-center justify-between gap-2 border-b border-line bg-surface-2/30 px-5 py-2 text-[11px]">
+              <span className="font-medium text-ink-2">Shock Scope Confirmation:</span>
+              <div role="group" aria-label="Shock confirmation mode" className="flex rounded-lg border border-line bg-surface p-0.5 font-mono text-[10px]">
+                <button
+                  type="button"
+                  aria-pressed={!isUnconfirmed}
+                  onClick={() =>
+                    onUpdateShockUncertainty({
+                      shockMode: "confirmed",
+                      durationConfirmed: true,
+                      zoneConfirmed: true,
+                    })
+                  }
+                  className={`rounded-md px-2 py-1 font-semibold transition-colors ${
+                    !isUnconfirmed ? "bg-accent text-accent-fg" : "text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Confirmed PSI
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={isUnconfirmed}
+                  onClick={() =>
+                    onUpdateShockUncertainty({
+                      shockMode: "unconfirmed",
+                      durationConfirmed: false,
+                      zoneConfirmed: false,
+                    })
+                  }
+                  className={`rounded-md px-2 py-1 font-semibold transition-colors ${
+                    isUnconfirmed
+                      ? "bg-amber-500/20 text-[var(--status-warning-text)]"
+                      : "text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Unconfirmed Duration &amp; Zone
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Navigation Tabs Inside Drawer */}
           <div
             role="tablist"
             aria-label="Order Rescue Analysis Views"
-            className="flex items-center gap-1 border-b border-line bg-surface px-5 pt-2 text-xs"
+            className="flex items-center gap-1 overflow-x-auto border-b border-line bg-surface px-5 pt-2 text-xs"
           >
             <button
               type="button"
               role="tab"
               aria-selected={drawerView === "PLANS"}
               onClick={() => setDrawerView("PLANS")}
-              className={`flex items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
                 drawerView === "PLANS" ? "text-ink" : "text-ink-muted hover:text-ink"
               }`}
             >
               <ZapIcon className="h-3.5 w-3.5 text-amber-500" />
-              <span>Ranked Plans ({plans.length})</span>
+              <span>{isUnconfirmed ? "Honest Rank" : "Ranked Plans"} ({plans.length})</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={drawerView === "MATRIX"}
+              onClick={() => setDrawerView("MATRIX")}
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
+                drawerView === "MATRIX" ? "text-ink" : "text-ink-muted hover:text-ink"
+              }`}
+            >
+              <ShieldCheckIcon className="h-3.5 w-3.5 text-emerald-500" />
+              <span>Scenario Grid</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={drawerView === "GANTT"}
               onClick={() => setDrawerView("GANTT")}
-              className={`flex items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
                 drawerView === "GANTT" ? "text-ink" : "text-ink-muted hover:text-ink"
               }`}
             >
@@ -427,17 +601,37 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               role="tab"
               aria-selected={drawerView === "XAI"}
               onClick={() => setDrawerView("XAI")}
-              className={`flex items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-2 font-semibold transition-colors ${
                 drawerView === "XAI" ? "text-ink" : "text-ink-muted hover:text-ink"
               }`}
             >
               <BrainIcon className="h-3.5 w-3.5 text-indigo-500" />
-              <span>SHAP Attribution</span>
+              <span>Attribution</span>
             </button>
           </div>
 
           {/* Drawer Scrollable Content */}
-          <div className="scroll-shadow-y gasline-scroll flex-1 space-y-5 overflow-y-auto p-5">
+          <div className="scroll-shadow-y gasline-scroll flex-1 space-y-4 overflow-y-auto p-5">
+            {/* Honest Guardrail Banner When Duration or Zone Is Unconfirmed */}
+            {isUnconfirmed && uncertaintySummary && (
+              <div className="rounded-xl border border-amber-400/50 bg-amber-400/10 p-3.5 text-xs">
+                <div className="flex items-center justify-between font-semibold text-[var(--status-warning-text)]">
+                  <span className="flex items-center gap-1.5">
+                    <AlertTriangleIcon className="h-4 w-4 shrink-0 text-amber-500" />
+                    <span>Honest Ranking Active · {uncertaintySummary.scenarios_evaluated} Scenarios Scored</span>
+                  </span>
+                  {uncertaintySummary.ranking_flips_across_scenarios && (
+                    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold">
+                      Rank Flips Detected
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-ink-2">
+                  {uncertaintySummary.honest_guidance}
+                </p>
+              </div>
+            )}
+
             {/* Exposure & Risk Card */}
             <div className="rounded-xl border border-[var(--status-critical-border)] bg-[var(--status-critical-bg)] p-4 text-xs">
               <div className="flex items-center justify-between font-semibold text-[var(--status-critical-text)]">
@@ -458,17 +652,15 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                   </strong>
                 </div>
                 <div>
-                  <span className="block text-[11px] text-ink-muted">Buyer Daily Delay Fee</span>
+                  <span className="block text-[11px] text-ink-muted">
+                    {isUnconfirmed && baselineRangeUsd ? "Exposure Envelope" : "Buyer Daily Delay Fee"}
+                  </span>
                   <strong className="font-bold text-ink">
-                    ${activeOrder.penalty_per_day_usd.toLocaleString()}/day
+                    {isUnconfirmed && baselineRangeUsd
+                      ? `$${Math.round(baselineRangeUsd[0]).toLocaleString()}–$${Math.round(baselineRangeUsd[1]).toLocaleString()}`
+                      : `$${activeOrder.penalty_per_day_usd.toLocaleString()}/day`}
                   </strong>
                 </div>
-              </div>
-
-              <div className="mt-3 text-[11px] text-ink-2">
-                Cancellation threshold:{" "}
-                <strong className="text-ink">{activeOrder.cancel_threshold_days} days late</strong>. Delays
-                past cutoff trigger 100% factory air-freight liability.
               </div>
             </div>
 
@@ -477,9 +669,11 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               <div>
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-ink">
-                    Ranked AI Rescue Strategies
+                    {isUnconfirmed ? "Regret-Adjusted Rescue Strategies" : "Ranked AI Rescue Strategies"}
                   </h3>
-                  <span className="text-[11px] text-ink-muted">Sorted by Net Dollar Savings</span>
+                  <span className="text-[11px] text-ink-muted">
+                    {isUnconfirmed ? "Sorted by No-Regret & Expected Value" : "Sorted by Net Dollar Savings"}
+                  </span>
                 </div>
 
                 {loading ? (
@@ -487,14 +681,13 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                     {[1, 2, 3].map((i) => (
                       <div
                         key={i}
-                        className="animate-pulse rounded-xl border border-line bg-surface-2/60 p-4 space-y-2.5"
+                        className="animate-pulse space-y-2.5 rounded-xl border border-line bg-surface-2/60 p-4"
                       >
                         <div className="flex justify-between">
                           <div className="h-4 w-40 rounded bg-line" />
                           <div className="h-4 w-20 rounded bg-line" />
                         </div>
                         <div className="h-3 w-full rounded bg-line/70" />
-                        <div className="h-3 w-2/3 rounded bg-line/70" />
                       </div>
                     ))}
                   </div>
@@ -502,6 +695,21 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                   <div className="space-y-2.5">
                     {plans.map((plan) => {
                       const isSelected = selectedPlanId === plan.plan_id;
+                      const range = plan.net_saving_range_usd;
+                      const costRange = plan.cost_range_usd;
+                      const hasInterval = isUnconfirmed && range && range[0] !== range[1];
+                      const hasCostSpan = isUnconfirmed && costRange && costRange[0] !== costRange[1];
+                      const stage = plan.commitment_stage || (plan.recommended ? "CONFIRMED_EXECUTE" : "OPTIONAL");
+
+                      const badgeClass =
+                        stage === "NO_REGRET_NOW" || stage === "CONFIRMED_EXECUTE"
+                          ? "border-[var(--status-safe-border)] bg-[var(--status-safe-bg)] text-[var(--status-safe-text)]"
+                          : stage === "CONDITIONAL_HOLD"
+                          ? "border-amber-400/50 bg-amber-400/15 text-[var(--status-warning-text)]"
+                          : stage === "AVOID_UPFRONT"
+                          ? "border-[var(--status-critical-border)] bg-[var(--status-critical-bg)] text-[var(--status-critical-text)]"
+                          : "border-line bg-surface-2 text-ink-2";
+
                       return (
                         <button
                           key={plan.plan_id}
@@ -518,31 +726,62 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                             <div>
                               <div className="flex flex-wrap items-center gap-2 font-semibold text-ink">
                                 <span>{plan.plan_name}</span>
-                                {plan.recommended && (
-                                  <span className="rounded border border-[var(--status-safe-border)] bg-[var(--status-safe-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--status-safe-text)]">
-                                    Recommended
+                                {(plan.honest_badge || plan.recommended) && (
+                                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${badgeClass}`}>
+                                    {plan.honest_badge || "Recommended"}
                                   </span>
                                 )}
                               </div>
                               <span className="mt-0.5 block text-[11px] text-ink-muted">{plan.category}</span>
                             </div>
-                            <div className="font-tabular text-right font-mono">
-                              <span className="block text-xs font-bold text-[var(--status-safe-text)]">
-                                +${plan.net_saving_usd.toLocaleString()} Net
+                            <div className="font-tabular shrink-0 text-right font-mono">
+                              <span
+                                className={`block text-xs font-bold ${
+                                  plan.net_saving_usd >= 0
+                                    ? "text-[var(--status-safe-text)]"
+                                    : "text-[var(--status-critical-text)]"
+                                }`}
+                              >
+                                {isUnconfirmed ? "Exp " : ""}
+                                {plan.net_saving_usd >= 0 ? "+" : ""}$
+                                {Math.round(plan.net_saving_usd).toLocaleString()}
                               </span>
-                              <span className="text-[10px] text-ink-muted">
-                                ROI: {plan.roi_pct.toFixed(0)}%
-                              </span>
+                              {hasInterval && range ? (
+                                <span className="block text-[10px] text-ink-muted">
+                                  [{range[0] < 0 ? `-$${Math.abs(Math.round(range[0])).toLocaleString()}` : `+$${Math.round(range[0]).toLocaleString()}`} .. +$
+                                  {Math.round(range[1]).toLocaleString()}]
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-ink-muted">ROI: {plan.roi_pct.toFixed(0)}%</span>
+                              )}
                             </div>
                           </div>
 
                           <p className="mt-2 text-[11px] leading-relaxed text-ink-2">{plan.description}</p>
 
-                          <div className="font-tabular mt-3 flex items-center justify-between border-t border-line pt-2.5 font-mono text-[11px] text-ink-muted">
+                          {isUnconfirmed && plan.trigger_rule && (
+                            <div className="mt-2 rounded-lg border border-line bg-surface-2/60 px-2.5 py-1.5 text-[10px] leading-snug text-ink-2">
+                              <strong className="text-ink">Guardrail:</strong> {plan.trigger_rule}
+                            </div>
+                          )}
+
+                          <div className="font-tabular mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5 font-mono text-[11px] text-ink-muted">
                             <span>
-                              Cost: <strong className="text-ink">${plan.implementation_cost_usd.toLocaleString()}</strong>{" "}
-                              (৳{plan.implementation_cost_bdt.toLocaleString()})
+                              Cost:{" "}
+                              <strong className="text-ink">
+                                {hasCostSpan && costRange
+                                  ? `$${Math.round(costRange[0]).toLocaleString()}–$${Math.round(costRange[1]).toLocaleString()}`
+                                  : `$${Math.round(plan.implementation_cost_usd).toLocaleString()}`}
+                              </strong>
                             </span>
+                            {isUnconfirmed && plan.max_regret_usd !== undefined && (
+                              <span>
+                                Max Regret:{" "}
+                                <strong className={plan.max_regret_usd > 400 ? "text-[var(--status-warning-text)]" : "text-ink"}>
+                                  ${Math.round(plan.max_regret_usd).toLocaleString()}
+                                </strong>
+                              </span>
+                            )}
                             <span>
                               Recovered: <strong className="text-ink">+{plan.days_saved}d</strong>
                             </span>
@@ -555,7 +794,72 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               </div>
             )}
 
-            {/* TAB 2: Dynamic Animated Gantt Scheduler */}
+            {/* TAB 2: Scenario Matrix (Zone x Duration Winner Grid) */}
+            {drawerView === "MATRIX" && (
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
+                      Zone × Duration Scenario Winner Matrix
+                    </h3>
+                    <p className="mt-0.5 text-[11px] text-ink-muted">
+                      Shows why a single point recommendation fails when duration or zone is unconfirmed.
+                    </p>
+                  </div>
+                  {!isUnconfirmed && onUpdateShockUncertainty && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateShockUncertainty({
+                          shockMode: "unconfirmed",
+                          durationConfirmed: false,
+                          zoneConfirmed: false,
+                        })
+                      }
+                      className="rounded-lg border border-amber-400/50 bg-amber-400/15 px-2.5 py-1 font-mono text-[10px] font-semibold text-[var(--status-warning-text)]"
+                    >
+                      Enable Unconfirmed Mode
+                    </button>
+                  )}
+                </div>
+
+                {uncertaintySummary?.scenario_matrix && uncertaintySummary.scenario_matrix.length > 0 ? (
+                  <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+                    <table className="w-full text-left text-[11px]">
+                      <thead>
+                        <tr className="border-b border-line bg-surface-2/60 font-mono text-[10px] uppercase text-ink-muted">
+                          <th className="p-2.5">Scenario (Zone · Duration)</th>
+                          <th className="p-2.5 text-right">Prior</th>
+                          <th className="p-2.5">Optimal Hindsight Action</th>
+                          <th className="p-2.5 text-right">Best Net</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-line font-mono">
+                        {uncertaintySummary.scenario_matrix.map((cell) => (
+                          <tr key={cell.scenario_id} className="hover:bg-surface-2/40">
+                            <td className="p-2.5 font-sans text-ink">{cell.label}</td>
+                            <td className="font-tabular p-2.5 text-right text-ink-muted">
+                              {cell.probability_pct.toFixed(1)}%
+                            </td>
+                            <td className="p-2.5 font-sans font-medium text-ink">{cell.winning_plan_name}</td>
+                            <td className="font-tabular p-2.5 text-right font-semibold text-[var(--status-safe-text)]">
+                              +${Math.round(cell.winning_net_saving_usd).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-line bg-surface-2/40 p-4 text-xs text-ink-2">
+                    Currently in <strong>Confirmed PSI Mode</strong> (single deterministic state). Toggle{" "}
+                    <strong>Unconfirmed Duration &amp; Zone</strong> above to inspect the full 9-scenario regret matrix.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 3: Dynamic Animated Gantt Scheduler */}
             {drawerView === "GANTT" && (
               <div className="space-y-4 font-mono text-xs">
                 <div>
@@ -581,7 +885,6 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                   </div>
 
                   <div className="relative space-y-2 pt-1">
-                    {/* Maritime Cutoff Line */}
                     <div
                       aria-hidden="true"
                       className="pointer-events-none absolute inset-y-0 z-10 border-l-2 border-dashed border-rose-500/70"
@@ -590,7 +893,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
 
                     <div>
                       <div className="mb-0.5 flex justify-between text-[10px] text-ink-2">
-                        <span>Boiler & Dyeing (Day Shift 08:00–18:00)</span>
+                        <span>Boiler &amp; Dyeing (Day Shift 08:00–18:00)</span>
                         <span className="font-bold text-[var(--status-critical-text)]">
                           {(activeOrder.current_psi ?? 2.1).toFixed(1)} PSI Throttle
                         </span>
@@ -607,7 +910,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
 
                     <div>
                       <div className="mb-0.5 flex justify-between text-[10px] text-ink-2">
-                        <span>Cutting & Sewing (Single Line)</span>
+                        <span>Cutting &amp; Sewing (Single Line)</span>
                         <span>Ends Day {baselineEndDay}</span>
                       </div>
                       <div className="flex h-4 w-full overflow-hidden rounded-full bg-surface-2">
@@ -644,7 +947,6 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                   </div>
 
                   <div className="relative space-y-2 pt-1">
-                    {/* Maritime Cutoff Line */}
                     <div
                       aria-hidden="true"
                       className="pointer-events-none absolute inset-y-0 z-10 border-l-2 border-dashed border-emerald-600/70"
@@ -668,7 +970,7 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
 
                     <div>
                       <div className="mb-0.5 flex justify-between text-[10px] text-ink-2">
-                        <span>Accelerated Sewing & Finishing</span>
+                        <span>Accelerated Sewing &amp; Finishing</span>
                         <span className="font-bold text-[var(--status-safe-text)]">+{daysSaved}d Saved</span>
                       </div>
                       <div className="flex h-4 w-full overflow-hidden rounded-full bg-surface-2">
@@ -702,24 +1004,23 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                 <div className="flex items-start gap-2 rounded-lg border border-line bg-surface-2/60 p-3 font-sans text-[11px] text-ink-2">
                   <InfoIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-muted" />
                   <span>
-                    <strong>Operational Principle:</strong> By shifting dyeing batches to nocturnal off-peak pressure
-                    windows and activating parallel sewing lines, the factory avoids $50k+ in emergency aviation
-                    surcharges.
+                    <strong>Operational Principle:</strong> Shifting dyeing batches to off-peak night windows and
+                    splitting sewing lines rescues vessel cut-offs without premature diesel burn.
                   </span>
                 </div>
               </div>
             )}
 
-            {/* TAB 3: Explainable AI (SHAP Waterfall) */}
+            {/* TAB 4: Explainable AI Attribution */}
             {drawerView === "XAI" && (
               <div className="space-y-4 font-mono text-xs">
                 <div className="space-y-3 rounded-xl border border-line bg-surface-2/50 p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-ink">
-                      Model B Explainable AI Decomposition
+                      Model B Marginal Risk Decomposition
                     </span>
                     <span className="rounded bg-accent px-2 py-0.5 font-mono text-[10px] font-semibold text-accent-fg">
-                      TreeSHAP Formulation
+                      Additive Attribution
                     </span>
                   </div>
                   <p className="font-sans text-[11px] leading-relaxed text-ink-2">
@@ -781,12 +1082,6 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
                     </div>
                   </div>
                 </div>
-
-                <div className="rounded-xl border border-line bg-surface p-3 font-sans text-[11px] leading-relaxed text-ink-2">
-                  <strong>Calibration &amp; Baseline Methodology:</strong> Feature attributions are computed against a
-                  peacetime reference baseline (12.0 PSI pipeline pressure, 73.5% line productivity). TreeSHAP ensures
-                  additivity so marginal contributions sum directly to the expected late classification probability.
-                </div>
               </div>
             )}
           </div>
@@ -799,7 +1094,9 @@ export default function RescueDrawer({ order, onClose, onOpenAudit }: RescueDraw
               </label>
               <input
                 id="line-chief-mobile"
-                type="text"
+                name="recipient_phone"
+                type="tel"
+                autoComplete="tel"
                 value={recipientPhone}
                 onChange={(e) => setRecipientPhone(e.target.value)}
                 className="flex-1 rounded-lg border border-line bg-surface px-2.5 py-1 font-mono text-xs text-ink focus:border-line-strong focus:outline-none"

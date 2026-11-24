@@ -10,7 +10,7 @@ import RescueDrawer from "../components/RescueDrawer";
 import AuditModal from "../components/AuditModal";
 import AddGarmentModal from "../components/AddGarmentModal";
 import DieselScheduler from "../components/DieselScheduler";
-import PromiseDateEngine from "../components/PromiseDateEngine";
+import PromiseDateEngine, { ShockUncertaintyConfig } from "../components/PromiseDateEngine";
 import BenchmarkView from "../components/BenchmarkView";
 import NationalMap from "../components/NationalMap";
 import AiCopilotModal from "../components/AiCopilotModal";
@@ -21,6 +21,7 @@ import { ToastProvider, useToast } from "../components/ToastProvider";
 import fallbackOrders from "../data/initial_orders.json";
 import { CLUSTERS, ClusterOption } from "../data/clusters";
 import { Language, translations } from "../data/translations";
+import { API_BASE } from "../utils/api";
 import { applyTheme } from "../utils/theme";
 import {
   AlertTriangleIcon,
@@ -96,7 +97,15 @@ function GasLineDashboardContent() {
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
   const [lang, setLang] = useState<Language>("en");
-  const [activeTab, setActiveTab] = useState<DashboardTab>("ORDERS");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("PROMISE");
+  const [shockUncertainty, setShockUncertainty] = useState<ShockUncertaintyConfig>({
+    shockMode: "confirmed",
+    durationConfirmed: true,
+    zoneConfirmed: true,
+    durationMinDays: 2,
+    durationMaxDays: 21,
+    zoneHitPrior: 0.55,
+  });
   const [autoStream, setAutoStream] = useState<boolean>(false);
   const [autonomousDeployed, setAutonomousDeployed] = useState<boolean>(false);
   const [alertDismissedAtPsi, setAlertDismissedAtPsi] = useState<number | null>(null);
@@ -165,7 +174,9 @@ function GasLineDashboardContent() {
   }, []);
 
   const handleAddCustomOrder = (newOrder: OrderItem, openRescueNow?: boolean) => {
+    scadaAudio.playSuccessChime();
     setOrders((prev) => [newOrder, ...prev]);
+    setActiveTab("ORDERS");
     if (openRescueNow) {
       setSelectedOrder(newOrder);
     }
@@ -173,7 +184,7 @@ function GasLineDashboardContent() {
 
   const checkHealth = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/health");
+      const res = await fetch(`${API_BASE}/health`);
       if (res.ok) {
         const data = await res.json();
         setBackendOnline(true);
@@ -262,9 +273,14 @@ function GasLineDashboardContent() {
   );
 
   const triggerSimulation = useCallback(
-    async (payload: { shock_id?: number; custom_psi?: number }) => {
+    async (payload: {
+      shock_id?: number;
+      custom_psi?: number;
+      uncertaintyOverride?: ShockUncertaintyConfig;
+    }) => {
       const reqSeq = ++simRequestSeqRef.current;
       setIsSimulating(true);
+      const unc = payload.uncertaintyOverride ?? shockUncertainty;
 
       let targetPsi = currentPsi;
       let targetSupply = currentSupply;
@@ -280,10 +296,19 @@ function GasLineDashboardContent() {
       }
 
       try {
-        const res = await fetch("http://127.0.0.1:8000/api/simulate-shock", {
+        const res = await fetch(`${API_BASE}/api/simulate-shock`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            shock_id: payload.shock_id,
+            custom_psi: payload.custom_psi,
+            shock_mode: unc.shockMode,
+            duration_confirmed: unc.durationConfirmed,
+            zone_confirmed: unc.zoneConfirmed,
+            duration_min_days: unc.durationMinDays,
+            duration_max_days: unc.durationMaxDays,
+            zone_hit_prior: unc.zoneHitPrior,
+          }),
         });
         if (res.ok) {
           const data = await res.json();
@@ -332,21 +357,36 @@ function GasLineDashboardContent() {
         }
       }
     },
-    [currentPsi, currentSupply, shocks, simulateOrdersLocally]
+    [currentPsi, currentSupply, shocks, shockUncertainty, simulateOrdersLocally]
+  );
+
+  const handleUpdateShockUncertainty = useCallback(
+    (patch: Partial<ShockUncertaintyConfig>) => {
+      setShockUncertainty((prev) => {
+        const next = { ...prev, ...patch };
+        triggerSimulation({
+          shock_id: activeShockId ?? undefined,
+          custom_psi: activeShockId === null ? currentPsi : undefined,
+          uncertaintyOverride: next,
+        });
+        return next;
+      });
+    },
+    [activeShockId, currentPsi, triggerSimulation]
   );
 
   // Initial load
   useEffect(() => {
     checkHealth().then((isOnline) => {
       if (isOnline) {
-        fetch("http://127.0.0.1:8000/api/shocks")
+        fetch(`${API_BASE}/api/shocks`)
           .then((r) => (r.ok ? r.json() : null))
           .then((data) => {
             if (Array.isArray(data)) setShocks(data);
           })
           .catch(() => {});
 
-        fetch("http://127.0.0.1:8000/api/port-buffer")
+        fetch(`${API_BASE}/api/port-buffer`)
           .then((r) => (r.ok ? r.json() : null))
           .then((data) => {
             if (data && data.recommended_buffer_days) setPortBuffer(data);
@@ -492,13 +532,16 @@ function GasLineDashboardContent() {
     if (!worstOrder) return;
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/dispatch-alert", {
+      const res = await fetch(`${API_BASE}/api/dispatch-alert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           order_id: worstOrder.order_id,
           channel: "whatsapp",
           recipient: "+8801712345678",
+          shock_mode: shockUncertainty.shockMode,
+          duration_confirmed: shockUncertainty.durationConfirmed,
+          zone_confirmed: shockUncertainty.zoneConfirmed,
         }),
       });
       const data = await res.json();
@@ -538,7 +581,13 @@ function GasLineDashboardContent() {
   const showEmergencyBanner =
     isCriticalShock && (alertDismissedAtPsi === null || currentPsi < alertDismissedAtPsi - 0.25);
 
-  const tabs: { id: DashboardTab; label: string; icon: React.ReactNode; badge?: number }[] = [
+  const tabs: { id: DashboardTab; label: string; icon: React.ReactNode; badge?: number; tag?: string }[] = [
+    {
+      id: "PROMISE",
+      label: t.promiseDateTab,
+      icon: <ClockIcon className="h-3.5 w-3.5 text-emerald-500" />,
+      tag: "Pre-PO",
+    },
     {
       id: "ORDERS",
       label: t.dashboardTab,
@@ -546,7 +595,6 @@ function GasLineDashboardContent() {
       badge: ordersAtRisk > 0 ? ordersAtRisk : undefined,
     },
     { id: "DIESEL", label: t.dieselSchedulerTab, icon: <FuelIcon className="h-3.5 w-3.5" /> },
-    { id: "PROMISE", label: t.promiseDateTab, icon: <ClockIcon className="h-3.5 w-3.5" /> },
     { id: "BENCHMARK", label: t.benchmarkTab, icon: <BarChartIcon className="h-3.5 w-3.5" /> },
     { id: "MAP", label: t.nationalMapTab, icon: <MapIcon className="h-3.5 w-3.5" /> },
   ];
@@ -577,6 +625,7 @@ function GasLineDashboardContent() {
         onSelectCluster={handleSelectCluster}
         lang={lang}
         onToggleLang={(newLang) => setLang(newLang)}
+        onOpenQuotePromise={() => setActiveTab("PROMISE")}
         onRunJudgeDemo={handleRunJudgeDemo}
         onOpenCopilot={() => setIsCopilotOpen(true)}
         onOpenVisionScan={() => setIsVisionScanOpen(true)}
@@ -735,6 +784,11 @@ function GasLineDashboardContent() {
                 >
                   {tab.icon}
                   <span>{tab.label}</span>
+                  {tab.tag && (
+                    <span className="rounded border border-[var(--status-safe-border)] bg-[var(--status-safe-bg)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--status-safe-text)]">
+                      {tab.tag}
+                    </span>
+                  )}
                   {tab.badge !== undefined && (
                     <span className="font-tabular rounded-full border border-[var(--status-critical-border)] bg-[var(--status-critical-bg)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--status-critical-text)]">
                       {tab.badge}
@@ -767,6 +821,8 @@ function GasLineDashboardContent() {
               isSimulating={isSimulating}
               autoStream={autoStream}
               onToggleAutoStream={() => setAutoStream(!autoStream)}
+              shockUncertainty={shockUncertainty}
+              onUpdateShockUncertainty={handleUpdateShockUncertainty}
               lang={lang}
             />
 
@@ -790,7 +846,16 @@ function GasLineDashboardContent() {
         {/* TAB 3: Pre-PO Promise-Date Engine */}
         {activeTab === "PROMISE" && (
           <div role="tabpanel" aria-labelledby="tab-PROMISE">
-            <PromiseDateEngine currentPsi={currentPsi} dyeingCap={dyeingCap} lang={lang} />
+            <PromiseDateEngine
+              currentPsi={currentPsi}
+              currentSupply={currentSupply}
+              dyeingCap={dyeingCap}
+              zoneName={activeCluster.name}
+              lang={lang}
+              shockUncertainty={shockUncertainty}
+              onUpdateShockUncertainty={handleUpdateShockUncertainty}
+              onAcceptOrderToLedger={handleAddCustomOrder}
+            />
           </div>
         )}
 
@@ -850,6 +915,8 @@ function GasLineDashboardContent() {
           setSelectedOrder(null);
           setAuditOrder(order);
         }}
+        shockUncertainty={shockUncertainty}
+        onUpdateShockUncertainty={handleUpdateShockUncertainty}
       />
 
       {/* Formal Buyer Force Majeure Audit Notice Modal */}

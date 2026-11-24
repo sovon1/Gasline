@@ -13,6 +13,7 @@ import {
   ActivityIcon,
   CheckIcon,
   ChevronDownIcon,
+  ClockIcon,
   CommandIcon,
   FactoryIcon,
   FlameIcon,
@@ -34,6 +35,7 @@ interface HeaderProps {
   onSelectCluster: (cluster: ClusterOption) => void;
   lang: Language;
   onToggleLang: (newLang: Language) => void;
+  onOpenQuotePromise?: () => void;
   onRunJudgeDemo?: () => void;
   onOpenCopilot?: () => void;
   onOpenVisionScan?: () => void;
@@ -83,6 +85,7 @@ export default function Header({
   onSelectCluster,
   lang,
   onToggleLang,
+  onOpenQuotePromise,
   onRunJudgeDemo,
   onOpenCopilot,
   onOpenVisionScan,
@@ -232,6 +235,19 @@ export default function Header({
                 <kbd className="hidden rounded border border-line bg-surface-2 px-1 py-0.5 font-mono text-[10px] text-ink-2 lg:inline">
                   ⌘K
                 </kbd>
+              </button>
+            )}
+
+            {onOpenQuotePromise && (
+              <button
+                type="button"
+                onClick={onOpenQuotePromise}
+                title="Promise Ship Date at Quotation Time (Before Accepting PO)"
+                aria-label="Open Quote Promise Engine"
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2 text-xs font-semibold text-[var(--status-safe-text)] transition-all hover:bg-emerald-500/25 active:scale-[0.97] sm:px-2.5"
+              >
+                <ClockIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="hidden whitespace-nowrap sm:inline">Quote PO</span>
               </button>
             )}
 

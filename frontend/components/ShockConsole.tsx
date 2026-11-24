@@ -1,8 +1,9 @@
 "use client";
 
 import React from "react";
-import { FlameIcon, RadioIcon } from "./Icons";
+import { AlertTriangleIcon, FlameIcon, RadioIcon, ShieldCheckIcon } from "./Icons";
 import { Language, translations } from "../data/translations";
+import { ShockUncertaintyConfig } from "./PromiseDateEngine";
 
 interface ShockPreset {
   shock_id: number;
@@ -22,6 +23,8 @@ interface ShockConsoleProps {
   isSimulating: boolean;
   autoStream: boolean;
   onToggleAutoStream: () => void;
+  shockUncertainty: ShockUncertaintyConfig;
+  onUpdateShockUncertainty: (next: Partial<ShockUncertaintyConfig>) => void;
   lang?: Language;
 }
 
@@ -35,10 +38,25 @@ export default function ShockConsole({
   isSimulating,
   autoStream,
   onToggleAutoStream,
+  shockUncertainty,
+  onUpdateShockUncertainty,
   lang = "en",
 }: ShockConsoleProps) {
   const t = translations[lang];
   const progressPct = Math.min(100, Math.max(0, ((currentPsi - 1.0) / 14.0) * 100));
+  const isUnconfirmed =
+    shockUncertainty.shockMode === "unconfirmed" ||
+    !shockUncertainty.durationConfirmed ||
+    !shockUncertainty.zoneConfirmed;
+
+  const toggleUnconfirmedAnnouncement = () => {
+    const nextUnc = !isUnconfirmed;
+    onUpdateShockUncertainty({
+      shockMode: nextUnc ? "unconfirmed" : "confirmed",
+      durationConfirmed: !nextUnc,
+      zoneConfirmed: !nextUnc,
+    });
+  };
 
   return (
     <section className="rounded-xl border border-line bg-surface p-5 shadow-2xs">
@@ -58,8 +76,28 @@ export default function ShockConsole({
           <p className="mt-0.5 text-xs text-ink-muted">{t.shockConsoleDesc}</p>
         </div>
 
-        {/* Live Grid Supply Pill & Automated IoT Toggle */}
+        {/* Live Grid Supply Pill, Unconfirmed Shock Mode & Automated IoT Toggle */}
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={toggleUnconfirmedAnnouncement}
+            aria-pressed={isUnconfirmed}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all ${
+              isUnconfirmed
+                ? "border-amber-400/70 bg-amber-400/15 text-[var(--status-warning-text)] shadow-2xs"
+                : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2"
+            }`}
+          >
+            {isUnconfirmed ? (
+              <AlertTriangleIcon className="h-3.5 w-3.5 text-amber-500" />
+            ) : (
+              <ShieldCheckIcon className="h-3.5 w-3.5 text-emerald-500" />
+            )}
+            <span>
+              {isUnconfirmed ? "Unconfirmed Shock: ACTIVE" : "Unconfirmed Shock Mode"}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={onToggleAutoStream}
@@ -80,6 +118,108 @@ export default function ShockConsole({
           </div>
         </div>
       </div>
+
+      {/* Unconfirmed Announcement Ambiguity Controls (Duration & Zone Unknown) */}
+      <fieldset className="mt-4 rounded-xl border border-line bg-surface-2/40 p-3.5 text-xs">
+        <legend className="px-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+          Announcement Epistemic State · Duration &amp; Zone Confirmation
+        </legend>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="flex items-start gap-2">
+            <input
+              id="shock-dur-unknown"
+              name="duration_unconfirmed"
+              type="checkbox"
+              checked={!shockUncertainty.durationConfirmed}
+              onChange={(e) => {
+                const durConfirmed = !e.target.checked;
+                const nextUnc = !durConfirmed || !shockUncertainty.zoneConfirmed;
+                onUpdateShockUncertainty({
+                  durationConfirmed: durConfirmed,
+                  shockMode: nextUnc ? "unconfirmed" : "confirmed",
+                });
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-line accent-amber-600"
+            />
+            <label htmlFor="shock-dur-unknown" className="cursor-pointer leading-snug">
+              <span className="block font-semibold text-ink">No Confirmed Duration</span>
+              <span className="text-[10px] text-ink-muted">
+                Evaluate {shockUncertainty.durationMinDays}d quick fix vs. {shockUncertainty.durationMaxDays}d prolonged outage
+              </span>
+            </label>
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="shock-zone-unknown"
+              name="zone_unconfirmed"
+              type="checkbox"
+              checked={!shockUncertainty.zoneConfirmed}
+              onChange={(e) => {
+                const znConfirmed = !e.target.checked;
+                const nextUnc = !znConfirmed || !shockUncertainty.durationConfirmed;
+                onUpdateShockUncertainty({
+                  zoneConfirmed: znConfirmed,
+                  shockMode: nextUnc ? "unconfirmed" : "confirmed",
+                });
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-line accent-amber-600"
+            />
+            <label htmlFor="shock-zone-unknown" className="cursor-pointer leading-snug">
+              <span className="block font-semibold text-ink">No Confirmed Affected Zone</span>
+              <span className="text-[10px] text-ink-muted">
+                Evaluate Zone Spared (9.0 PSI), Spillover (4.3 PSI), &amp; Direct Hit
+              </span>
+            </label>
+          </div>
+
+          <div>
+            <label htmlFor="shock-max-days" className="mb-1 flex justify-between text-[11px] font-medium text-ink-2">
+              <span>Plausible Outage Span</span>
+              <span className="font-tabular font-mono font-semibold text-ink">
+                {shockUncertainty.durationMinDays}–{shockUncertainty.durationMaxDays}d
+              </span>
+            </label>
+            <input
+              id="shock-max-days"
+              name="duration_max_days"
+              type="range"
+              min={6}
+              max={30}
+              step={3}
+              disabled={shockUncertainty.durationConfirmed}
+              value={shockUncertainty.durationMaxDays}
+              onChange={(e) =>
+                onUpdateShockUncertainty({ durationMaxDays: parseInt(e.target.value, 10) })
+              }
+              className="w-full accent-amber-500 disabled:opacity-40"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="shock-zone-prior" className="mb-1 flex justify-between text-[11px] font-medium text-ink-2">
+              <span>Zone Hit Prior</span>
+              <span className="font-tabular font-mono font-semibold text-ink">
+                {Math.round(shockUncertainty.zoneHitPrior * 100)}%
+              </span>
+            </label>
+            <input
+              id="shock-zone-prior"
+              name="zone_hit_prior"
+              type="range"
+              min={20}
+              max={85}
+              step={5}
+              disabled={shockUncertainty.zoneConfirmed}
+              value={Math.round(shockUncertainty.zoneHitPrior * 100)}
+              onChange={(e) =>
+                onUpdateShockUncertainty({ zoneHitPrior: parseInt(e.target.value, 10) / 100 })
+              }
+              className="w-full accent-amber-500 disabled:opacity-40"
+            />
+          </div>
+        </div>
+      </fieldset>
 
       {/* Preset Scenario Selector */}
       <div className="mt-4">
@@ -134,6 +274,11 @@ export default function ShockConsole({
             <span className="font-tabular rounded-md border border-line bg-surface-2 px-2 py-0.5 font-mono text-xs font-bold text-ink">
               {currentPsi.toFixed(1)} PSI
             </span>
+            {isUnconfirmed && (
+              <span className="rounded border border-amber-400/50 bg-amber-400/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--status-warning-text)]">
+                Unconfirmed Envelope
+              </span>
+            )}
             {autoStream && (
               <span className="font-mono text-[10px] text-[var(--status-critical-text)]">
                 [SCADA Live Feed]
@@ -159,7 +304,7 @@ export default function ShockConsole({
             style={{ "--slider-progress": `${progressPct}%` } as React.CSSProperties}
           />
 
-          {/* 4.0 PSI Boiler Minimum Threshold Marker (21.4% along 1.0 - 15.0 PSI) */}
+          {/* 4.0 PSI Boiler Minimum Threshold Marker */}
           <div
             aria-hidden="true"
             className="pointer-events-none absolute top-[1.6rem] flex -translate-x-1/2 flex-col items-center"

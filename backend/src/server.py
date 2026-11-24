@@ -14,6 +14,8 @@ import numpy as np
 # Import our custom models and optimizer
 from optimizer import (
     evaluate_rescue_plans,
+    compute_quote_promise,
+    compute_window_energy,
     predict_order_risk,
     extract_gas_code,
     predict_process_capacities,
@@ -73,16 +75,61 @@ class ShockSimulateRequest(BaseModel):
     shock_id: Optional[int] = None
     custom_psi: Optional[float] = None
     custom_supply_mmcfd: Optional[float] = None
+    shock_mode: Optional[str] = "confirmed"
+    duration_confirmed: Optional[bool] = None
+    zone_confirmed: Optional[bool] = None
+    duration_min_days: Optional[int] = 2
+    duration_max_days: Optional[int] = 21
+    confirmed_duration_days: Optional[int] = None
+    zone_hit_prior: Optional[float] = 0.55
 
 class RescueRequest(BaseModel):
     order_id: Optional[str] = None
     custom_order: Optional[Dict[str, Any]] = None
     current_psi: Optional[float] = None
+    shock_mode: Optional[str] = "confirmed"
+    duration_confirmed: Optional[bool] = None
+    zone_confirmed: Optional[bool] = None
+    duration_min_days: Optional[int] = 2
+    duration_max_days: Optional[int] = 21
+    confirmed_duration_days: Optional[int] = None
+    zone_hit_prior: Optional[float] = 0.55
+
+class QuotePromiseRequest(BaseModel):
+    buyer: Optional[str] = "Inditex (Zara)"
+    product: Optional[str] = "Cotton Hoodie"
+    quantity: Optional[int] = 15000
+    base_smv: Optional[float] = None
+    total_weight_kg: Optional[float] = None
+    gas_intensity: Optional[str] = None
+    fob_unit_price_usd: Optional[float] = None
+    penalty_per_day_usd: Optional[float] = None
+    order_start_date: Optional[str] = None
+    buyer_requested_date: Optional[str] = None
+    buyer_requested_lead_days: Optional[int] = 42
+    current_psi: Optional[float] = 2.1
+    national_supply_mmcfd: Optional[float] = 2235.0
+    zone_name: Optional[str] = "Gazipur Industrial Corridor"
+    include_port_buffer: Optional[bool] = True
+    active_line_load_pct: Optional[float] = 78.0
+    shock_mode: Optional[str] = "confirmed"
+    duration_confirmed: Optional[bool] = None
+    zone_confirmed: Optional[bool] = None
+    duration_min_days: Optional[int] = 2
+    duration_max_days: Optional[int] = 21
+    confirmed_duration_days: Optional[int] = None
+    zone_hit_prior: Optional[float] = 0.55
 
 class AlertRequest(BaseModel):
     order_id: Optional[str] = None
     custom_order: Optional[Dict[str, Any]] = None
     top_plan_id: Optional[str] = None
+    shock_mode: Optional[str] = "confirmed"
+    duration_confirmed: Optional[bool] = None
+    zone_confirmed: Optional[bool] = None
+    duration_min_days: Optional[int] = 2
+    duration_max_days: Optional[int] = 21
+    zone_hit_prior: Optional[float] = 0.55
 
 class DispatchRequest(BaseModel):
     order_id: Optional[str] = None
@@ -90,6 +137,12 @@ class DispatchRequest(BaseModel):
     channel: Optional[str] = "whatsapp"
     recipient: Optional[str] = "+8801700000000"
     top_plan_id: Optional[str] = None
+    shock_mode: Optional[str] = "confirmed"
+    duration_confirmed: Optional[bool] = None
+    zone_confirmed: Optional[bool] = None
+    duration_min_days: Optional[int] = 2
+    duration_max_days: Optional[int] = 21
+    zone_hit_prior: Optional[float] = 0.55
 
 # -------------------------------------------------------------
 # API Endpoints
@@ -104,6 +157,12 @@ def health_check():
         "shocks_available": len(shocks_df),
         "model_accuracy": model_metadata["metrics"]["accuracy"],
         "conformal_q90_margin_days": model_metadata["conformal_q90"],
+        "conformal_quantiles": {
+            "q85": model_metadata.get("conformal_q85", 4.19),
+            "q90": model_metadata.get("conformal_q90", 5.38),
+            "q95": model_metadata.get("conformal_q95", 7.59),
+            "q97": model_metadata.get("conformal_q97", 9.94),
+        },
         "port_buffer_days": 2.5
     }
 
@@ -132,9 +191,15 @@ def get_benchmark_metrics():
     """
     return {
         "model_architecture": "HistGradientBoosting (Cascaded Models A & B)",
-        "training_samples": 5000,
-        "test_samples": 1500,
+        "training_samples": model_metadata.get("training_samples", 4200),
+        "test_samples": model_metadata.get("test_samples", 900) + model_metadata.get("calibration_samples", 900),
         "conformal_q90_margin_days": model_metadata["conformal_q90"],
+        "conformal_quantiles": {
+            "q85": model_metadata.get("conformal_q85", 4.19),
+            "q90": model_metadata.get("conformal_q90", 5.38),
+            "q95": model_metadata.get("conformal_q95", 7.59),
+            "q97": model_metadata.get("conformal_q97", 9.94),
+        },
         "metrics": model_metadata["metrics"],
         "features": model_metadata["features"],
         "ablation": {
@@ -189,6 +254,16 @@ def simulate_shock(req: ShockSimulateRequest):
     if req.custom_supply_mmcfd is not None:
         supply = float(req.custom_supply_mmcfd)
 
+    is_unconfirmed = (
+        str(req.shock_mode or "confirmed").lower() == "unconfirmed"
+        or (req.duration_confirmed is False)
+        or (req.zone_confirmed is False)
+    )
+    d_min = max(1, _safe_int(req.duration_min_days, 2))
+    d_max = max(d_min + 2, _safe_int(req.duration_max_days, 21))
+    d_mid = max(d_min + 1, int(round((d_min + d_max) * 0.40)))
+    zone_hit_prior = max(0.10, min(0.90, _safe_float(req.zone_hit_prior, 0.55)))
+
     # Compute process capacity response via Model A / Calibrated Physics
     cap_pred = predict_process_capacities(psi, supply)
     dyeing_cap = cap_pred["dyeing_cap"]
@@ -198,6 +273,8 @@ def simulate_shock(req: ShockSimulateRequest):
     # Re-evaluate all orders dynamically under this shock
     updated_orders = []
     total_exposure = 0.0
+    min_scenario_exposure = 0.0
+    max_scenario_exposure = 0.0
     late_count = 0
 
     for _, row in orders_df.iterrows():
@@ -209,13 +286,43 @@ def simulate_shock(req: ShockSimulateRequest):
         lead = int(row.get("lead_days", 14) or 14)
         penalty_per_day = float(row.get("penalty_per_day_usd", 2000.0) or 2000.0)
 
-        pred = predict_order_risk(qty, weight, smv, gas_code, lead, psi, dyeing_cap)
-        p_late = pred["prob_late"]
-        days_late = pred["predicted_days_late"]
+        if is_unconfirmed:
+            # Blend spared/short vs direct-hit/prolonged across order window
+            w_spared = compute_window_energy(9.0 if req.zone_confirmed is False else psi, d_min, lead, supply)
+            w_mid = compute_window_energy(min(psi, 1.8) if req.zone_confirmed is False else psi, d_mid, lead, supply)
+            w_worst = compute_window_energy(min(psi, 1.8) if req.zone_confirmed is False else psi, d_max, lead, supply)
 
-        air_freight = (weight * 6.65) if p_late > 0.4 else 0.0
-        delay_penalty = days_late * penalty_per_day
-        exposure = round(air_freight + delay_penalty, 2)
+            p_spared = predict_order_risk(qty, weight, smv, gas_code, lead, w_spared["avg_window_psi"], w_spared["avg_dyeing_capacity"])
+            p_mid = predict_order_risk(qty, weight, smv, gas_code, lead, w_mid["avg_window_psi"], w_mid["avg_dyeing_capacity"])
+            p_worst = predict_order_risk(qty, weight, smv, gas_code, lead, w_worst["avg_window_psi"], w_worst["avg_dyeing_capacity"])
+
+            exp_spared = ((weight * 6.65) if p_spared["prob_late"] > 0.4 else 0.0) + p_spared["predicted_days_late"] * penalty_per_day
+            exp_mid = ((weight * 6.65) if p_mid["prob_late"] > 0.4 else 0.0) + p_mid["predicted_days_late"] * penalty_per_day
+            exp_worst = ((weight * 6.65) if p_worst["prob_late"] > 0.4 else 0.0) + p_worst["predicted_days_late"] * penalty_per_day
+
+            hit_w = 1.0 if req.zone_confirmed is True else zone_hit_prior
+            p_late = round((1.0 - hit_w) * p_spared["prob_late"] + hit_w * (0.65 * p_mid["prob_late"] + 0.35 * p_worst["prob_late"]), 3)
+            days_late = round((1.0 - hit_w) * p_spared["predicted_days_late"] + hit_w * (0.65 * p_mid["predicted_days_late"] + 0.35 * p_worst["predicted_days_late"]), 1)
+            exposure = round((1.0 - hit_w) * exp_spared + hit_w * (0.65 * exp_mid + 0.35 * exp_worst), 2)
+            min_scenario_exposure += exp_spared
+            max_scenario_exposure += exp_worst
+            pred = {
+                "conformal_interval_90": [
+                    max(0.0, round(p_spared["predicted_days_late"] - model_metadata["conformal_q90"], 1)),
+                    round(p_worst["predicted_days_late"] + model_metadata["conformal_q90"], 1),
+                ],
+                "shap_attribution": p_mid.get("shap_attribution"),
+            }
+        else:
+            pred = predict_order_risk(qty, weight, smv, gas_code, lead, psi, dyeing_cap)
+            p_late = pred["prob_late"]
+            days_late = pred["predicted_days_late"]
+
+            air_freight = (weight * 6.65) if p_late > 0.4 else 0.0
+            delay_penalty = days_late * penalty_per_day
+            exposure = round(air_freight + delay_penalty, 2)
+            min_scenario_exposure += exposure
+            max_scenario_exposure += exposure
 
         is_late = 1 if (p_late > 0.5 or days_late > 0.5) else 0
         if is_late:
@@ -226,6 +333,7 @@ def simulate_shock(req: ShockSimulateRequest):
         item.update({
             "current_psi": psi,
             "current_dyeing_cap": dyeing_cap,
+            "shock_mode": "unconfirmed" if is_unconfirmed else "confirmed",
             "predicted_prob_late": p_late,
             "predicted_days_late": days_late,
             "conformal_interval_90": pred["conformal_interval_90"],
@@ -239,20 +347,26 @@ def simulate_shock(req: ShockSimulateRequest):
     risk_pct = round((late_count / total_ord) * 100, 1) if total_ord > 0 else 0.0
 
     return {
-        "scenario": shock_name,
+        "scenario": f"{shock_name} (Unconfirmed Scope)" if is_unconfirmed else shock_name,
+        "shock_mode": "unconfirmed" if is_unconfirmed else "confirmed",
         "parameters": {
             "gas_pressure_psi": psi,
             "national_supply_mmcfd": supply,
             "dyeing_capacity_factor": dyeing_cap,
             "knitting_capacity_factor": knitting_cap,
-            "sewing_capacity_factor": sewing_cap
+            "sewing_capacity_factor": sewing_cap,
+            "duration_confirmed": not is_unconfirmed if req.duration_confirmed is None else req.duration_confirmed,
+            "zone_confirmed": not is_unconfirmed if req.zone_confirmed is None else req.zone_confirmed,
+            "duration_range_days": [d_min, d_max] if is_unconfirmed else None,
+            "zone_hit_prior": zone_hit_prior if is_unconfirmed else 1.0,
         },
         "aggregate_impact": {
             "total_orders": total_ord,
             "orders_at_risk": late_count,
             "risk_percentage": risk_pct,
             "total_financial_exposure_usd": round(total_exposure, 2),
-            "total_financial_exposure_bdt": round(total_exposure * 120.0, 2)
+            "total_financial_exposure_bdt": round(total_exposure * 120.0, 2),
+            "exposure_range_usd": [round(min_scenario_exposure, 2), round(max_scenario_exposure, 2)],
         },
         "orders": [sanitize_record(o) for o in updated_orders]
     }
@@ -260,7 +374,9 @@ def simulate_shock(req: ShockSimulateRequest):
 @app.post("/api/rescue")
 def get_rescue_plan(req: RescueRequest):
     """
-    Runs the Greedy Rescue Optimizer to calculate ROI and net savings across all 5 operational rescue plans.
+    Runs the Operations-Research Rescue Optimizer across all 5 operational rescue plans.
+    Supports both Confirmed shocks and Unconfirmed shocks (unknown duration and/or unknown zone)
+    with minimax-regret & staged trigger guardrails.
     """
     target_order = None
     if req.order_id:
@@ -277,7 +393,6 @@ def get_rescue_plan(req: RescueRequest):
     else:
         raise HTTPException(status_code=400, detail="Must provide either order_id or custom_order.")
 
-    # Inject current_psi if provided
     if req.current_psi is not None:
         target_order = dict(target_order)
         psi_clamped = max(0.5, min(25.0, float(req.current_psi)))
@@ -285,8 +400,34 @@ def get_rescue_plan(req: RescueRequest):
         cap = predict_process_capacities(psi_clamped)
         target_order["current_dyeing_cap"] = cap["dyeing_cap"]
 
-    eval_result = evaluate_rescue_plans(target_order)
+    shock_unc = {
+        "shock_mode": req.shock_mode,
+        "duration_confirmed": req.duration_confirmed,
+        "zone_confirmed": req.zone_confirmed,
+        "duration_min_days": req.duration_min_days,
+        "duration_max_days": req.duration_max_days,
+        "confirmed_duration_days": req.confirmed_duration_days,
+        "zone_hit_prior": req.zone_hit_prior,
+    }
+    eval_result = evaluate_rescue_plans(target_order, shock_uncertainty=shock_unc)
     return sanitize_record(eval_result)
+
+@app.post("/api/quote-promise")
+def evaluate_order_quote_promise(req: QuotePromiseRequest):
+    """
+    Quotation-Time Promise-Date Engine (Judge Challenge 1 & Primary Direction):
+    Given a prospective merchandiser order quote, forward-sweeps candidate ship dates
+    through Model A + Model B + Split-Conformal bounds (85% / 90% / 97%) + CPA Port Buffer
+    and prices pre-signing rescue options before accepting the purchase order.
+    """
+    if req.quantity is not None and req.quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be a positive integer.")
+    if req.buyer_requested_lead_days is not None and req.buyer_requested_lead_days <= 0:
+        raise HTTPException(status_code=400, detail="buyer_requested_lead_days must be positive.")
+
+    payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    result = compute_quote_promise(payload)
+    return sanitize_record(result)
 
 @app.post("/api/alert-text")
 def generate_alert_text(req: AlertRequest):
@@ -308,8 +449,17 @@ def generate_alert_text(req: AlertRequest):
     else:
         raise HTTPException(status_code=400, detail="Must provide either order_id or custom_order.")
 
-    rescue_eval = evaluate_rescue_plans(order)
+    shock_unc = {
+        "shock_mode": req.shock_mode,
+        "duration_confirmed": req.duration_confirmed,
+        "zone_confirmed": req.zone_confirmed,
+        "duration_min_days": req.duration_min_days,
+        "duration_max_days": req.duration_max_days,
+        "zone_hit_prior": req.zone_hit_prior,
+    }
+    rescue_eval = evaluate_rescue_plans(order, shock_uncertainty=shock_unc)
     top_plan = rescue_eval["rescue_plans"][0]
+    is_unc = rescue_eval.get("shock_mode") == "unconfirmed"
     
     # If a specific plan was requested, pick that one
     if req.top_plan_id:
@@ -328,6 +478,16 @@ def generate_alert_text(req: AlertRequest):
     days_saved = top_plan["days_saved"]
     cost_bdt = top_plan["implementation_cost_bdt"]
     net_saving_usd = top_plan["net_saving_usd"]
+    stage_note_bn = (
+        "\n⚠️ অনিশ্চিত গ্যাস নোটিশ: সংকটের স্থায়িত্ব/জোন এখনো নিশ্চিত নয় — এখনই নো-রিগ্রেট ধাপ চালু করুন; লোকাল ম্যানিফোল্ড <৩.৫ PSI হলে তবেই ডিজেল অনুমোদন দিন।"
+        if is_unc
+        else ""
+    )
+    stage_note_en = (
+        f"\n⚠️ Honest Guardrail: Shock duration/zone unconfirmed ({top_plan.get('honest_badge', 'Staged Policy')}). {top_plan.get('trigger_rule', '')}"
+        if is_unc
+        else ""
+    )
 
     bangla_msg = (
         f"🚨 [GasLine জরুরী সতর্কবার্তা] 🚨\n"
@@ -337,7 +497,8 @@ def generate_alert_text(req: AlertRequest):
         f"✅ প্রস্তাবিত রেসকিউ অ্যাকশন: {top_plan['plan_name']}\n"
         f"⏱️ সময় সাশ্রয়: {days_saved} দিন\n"
         f"💰 বাস্তবায়ন খরচ: ৳{cost_bdt:,.0f} BDT\n"
-        f"🛡️ সম্ভাব্য মোট সাশ্রয়: ${net_saving_usd:,.2f} USD (এয়ার ফ্রেইট ও পেনাল্টি বাতিল)\n"
+        f"🛡️ সম্ভাব্য মোট সাশ্রয়: ${net_saving_usd:,.2f} USD (এয়ার ফ্রেইট ও পেনাল্টি বাতিল)"
+        f"{stage_note_bn}\n"
         f"নির্দেশনা: ফ্লোর ম্যানেজার দ্রুত অ্যাকশন প্ল্যান অনুমোদন করুন।"
     )
 
@@ -349,7 +510,8 @@ def generate_alert_text(req: AlertRequest):
         f"✅ Recommended Action: {top_plan['plan_name']}\n"
         f"⏱️ Recovery: {days_saved} days saved\n"
         f"💰 Action Cost: BDT {cost_bdt:,.0f} ($ {top_plan['implementation_cost_usd']:,.2f})\n"
-        f"🛡️ Net Avoided Penalty: ${net_saving_usd:,.2f} USD\n"
+        f"🛡️ Net Avoided Penalty: ${net_saving_usd:,.2f} USD"
+        f"{stage_note_en}\n"
         f"Action required: Floor manager approval requested."
     )
 
@@ -589,7 +751,13 @@ def dispatch_alert(req: DispatchRequest):
     alert_res = generate_alert_text(AlertRequest(
         order_id=req.order_id,
         custom_order=req.custom_order,
-        top_plan_id=req.top_plan_id
+        top_plan_id=req.top_plan_id,
+        shock_mode=req.shock_mode,
+        duration_confirmed=req.duration_confirmed,
+        zone_confirmed=req.zone_confirmed,
+        duration_min_days=req.duration_min_days,
+        duration_max_days=req.duration_max_days,
+        zone_hit_prior=req.zone_hit_prior,
     ))
     order_id = alert_res["order_id"]
     buyer = alert_res["buyer"]
@@ -764,21 +932,57 @@ async def copilot_chat(req: CopilotChatRequest):
             }
             action_chips.append({"label": f"🔍 Inspect {target_order_id}", "action": "OPEN_ORDER", "val": target_order_id})
 
-    # 3. Rescue Plan Optimizer Tool Trigger
-    if any(k in msg_lower for k in ["rescue", "save", "diesel", "plan", "solution", "উদ্ধার", "বাঁচানো", "ডিজেল", "সমাধান"]):
+    # 3. Rescue Plan Optimizer Tool Trigger (supports Unconfirmed Shock detection)
+    asks_unconfirmed = any(
+        k in msg_lower
+        for k in ["unconfirmed", "unknown duration", "unknown zone", "no confirmed", "uncertain", "অনিশ্চিত"]
+    )
+    if asks_unconfirmed or any(k in msg_lower for k in ["rescue", "save", "diesel", "plan", "solution", "উদ্ধার", "বাঁচানো", "ডিজেল", "সমাধান"]):
         oid = target_order_id or "ORD-2026-001"
-        tools_called.append(f"optimize_rescue(order_id='{oid}')")
-        rescue_res = get_rescue_plan(RescueRequest(order_id=oid, current_psi=target_psi or 1.6))
+        mode_flag = "unconfirmed" if asks_unconfirmed else "confirmed"
+        tools_called.append(f"optimize_rescue(order_id='{oid}', shock_mode='{mode_flag}')")
+        rescue_res = get_rescue_plan(RescueRequest(order_id=oid, current_psi=target_psi or 1.6, shock_mode=mode_flag))
         top_plan = rescue_res["rescue_plans"][0]
         structured_metrics["top_rescue_plan"] = {
             "order_id": oid,
+            "shock_mode": mode_flag,
             "plan_name": top_plan["plan_name"],
+            "honest_badge": top_plan.get("honest_badge"),
             "intervention_cost_usd": _safe_float(top_plan.get("intervention_cost_usd", top_plan.get("implementation_cost_usd")), 0.0),
             "avoided_air_freight_usd": _safe_float(top_plan.get("avoided_air_freight_usd", top_plan.get("avoided_loss_usd")), 0.0),
             "net_savings_usd": _safe_float(top_plan.get("net_savings_usd", top_plan.get("net_saving_usd")), 0.0),
-            "risk_reduction_pct": _safe_float(top_plan.get("risk_reduction_pct"), 0.0)
+            "net_saving_range_usd": top_plan.get("net_saving_range_usd"),
+            "max_regret_usd": top_plan.get("max_regret_usd", 0.0),
+            "risk_reduction_pct": _safe_float(top_plan.get("risk_reduction_pct"), 0.0),
+            "honest_guidance": rescue_res.get("uncertainty_summary", {}).get("honest_guidance"),
         }
         action_chips.append({"label": f"⚡ Deploy {top_plan['plan_name']}", "action": "DEPLOY_RESCUE", "val": oid})
+
+    # 3B. Pre-PO Quote Promise Tool Trigger
+    if any(k in msg_lower for k in ["quote", "promise", "ship date", "before accepting", "lead time", "কোটেশন", "ডেট", "কবে ডেলিভারি"]):
+        qty_m = re.search(r"(\d{3,6})\s*(?:pcs|pieces|units|পিস)?", msg_lower)
+        lead_m = re.search(r"(\d{1,3})\s*(?:days|day|d|দিন)", msg_lower)
+        q_qty = int(qty_m.group(1)) if qty_m else 15000
+        q_lead = int(lead_m.group(1)) if lead_m else 42
+        q_mode = "unconfirmed" if asks_unconfirmed else "confirmed"
+        tools_called.append(f"compute_quote_promise(qty={q_qty}, target_days={q_lead}, shock_mode='{q_mode}')")
+        q_res = compute_quote_promise({
+            "buyer": "Inditex (Zara)",
+            "product": "Cotton Hoodie",
+            "quantity": q_qty,
+            "buyer_requested_lead_days": q_lead,
+            "current_psi": target_psi or 2.1,
+            "shock_mode": q_mode,
+        })
+        structured_metrics["quote_promise"] = {
+            "requested_lead_days": q_lead,
+            "on_time_confidence_pct": q_res["buyer_request_evaluation"]["on_time_confidence_pct"],
+            "safe_85_date": q_res["promise_tiers"]["commercial_85"]["ship_date"],
+            "safe_90_date": q_res["promise_tiers"]["recommended_90"]["ship_date"],
+            "safe_90_days": q_res["promise_tiers"]["recommended_90"]["lead_days"],
+            "safe_97_date": q_res["promise_tiers"]["bulletproof_97"]["ship_date"],
+            "verdict": q_res["buyer_request_evaluation"]["verdict_label"],
+        }
 
     # 4. Port Logistics Advisory Tool Trigger
     if any(k in msg_lower for k in ["port", "vessel", "cpa", "chattogram", "chittagong", "dwell", "বন্দর", "চট্টগ্রাম"]):
@@ -926,7 +1130,15 @@ async def copilot_chat(req: CopilotChatRequest):
 
     # 8. Multi-Provider Frontier LLM Dispatcher (with Multi-Turn Context)
     provider = (req.provider or "").lower().strip()
-    api_key_to_use = req.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+    provider_env_key = os.getenv(f"{provider.upper()}_API_KEY") if provider in ("gemini", "groq", "openai") else None
+    api_key_to_use = (
+        req.api_key
+        or provider_env_key
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+    )
     req_model = (req.model or "").strip()
 
     # Auto-detect provider if unspecified
@@ -1048,7 +1260,23 @@ async def copilot_chat(req: CopilotChatRequest):
 
             if "top_rescue_plan" in structured_metrics:
                 plan = structured_metrics["top_rescue_plan"]
-                parts.append(f"⚡ **সুপারিশকৃত সমাধান**: **{plan['plan_name']}**। বাস্তবায়নে খরচ হবে **${plan['intervention_cost_usd']:,}**, তবে এয়ার ফ্রেইট সাশ্রয় হবে **${plan['avoided_air_freight_usd']:,}** (নেট সাশ্রয়: **${plan['net_savings_usd']:,}**, ঝুঁকি হ্রাস: **{plan['risk_reduction_pct']}%**)।")
+                if plan.get("shock_mode") == "unconfirmed":
+                    rng = plan.get("net_saving_range_usd", [0, 0])
+                    parts.append(
+                        f"🛡️ **অনিশ্চিত গ্যাস নোটিশ (সৎ রেসকিউ র‍্যাংকিং)**: যেহেতু সংকটের স্থায়িত্ব ও জোন নিশ্চিত নয়, "
+                        f"প্রস্তাবিত নো-রিগ্রেট পদক্ষেপ হলো **{plan['plan_name']}** ({plan.get('honest_badge')})। "
+                        f"সম্ভাব্য সাশ্রয় সীমা **${rng[0]:,.0f} থেকে ${rng[1]:,.0f}** (সর্বোচ্চ রিগ্রেট: **${plan.get('max_regret_usd', 0):,.0f}**)। "
+                        f"উচ্চ খরচের ডিজেল/ওভারটাইম লোকাল ম্যানিফোল্ড <৩.৫ PSI না হওয়া পর্যন্ত স্থগিত রাখুন।"
+                    )
+                else:
+                    parts.append(f"⚡ **সুপারিশকৃত সমাধান**: **{plan['plan_name']}**। বাস্তবায়নে খরচ হবে **${plan['intervention_cost_usd']:,}**, তবে এয়ার ফ্রেইট সাশ্রয় হবে **${plan['avoided_air_freight_usd']:,}** (নেট সাশ্রয়: **${plan['net_savings_usd']:,}**, ঝুঁকি হ্রাস: **{plan['risk_reduction_pct']}%**)।")
+
+            if "quote_promise" in structured_metrics:
+                qp = structured_metrics["quote_promise"]
+                parts.append(
+                    f"📅 **কোটেশন প্রমিস ইঞ্জিন**: বায়ারের {qp['requested_lead_days']} দিনের লক্ষ্যে অন-টাইম সম্ভাবনা **{qp['on_time_confidence_pct']}%**। "
+                    f"নিরাপদ প্রতিশ্রুতির তারিখসমূহ — ৮৫%: **{qp['safe_85_date']}**, ৯০% কনফর্মাল (প্রস্তাবিত): **{qp['safe_90_date']} ({qp['safe_90_days']} দিন)**, ৯৭%: **{qp['safe_97_date']}**।"
+                )
 
             if "port_buffer" in structured_metrics:
                 p = structured_metrics["port_buffer"]
@@ -1082,7 +1310,23 @@ async def copilot_chat(req: CopilotChatRequest):
 
             if "top_rescue_plan" in structured_metrics:
                 plan = structured_metrics["top_rescue_plan"]
-                parts.append(f"⚡ **Recommended Prescriptive Action**: Deploy **{plan['plan_name']}**. Action cost is **${plan['intervention_cost_usd']:,}**, avoiding **${plan['avoided_air_freight_usd']:,}** in penalties for a net benefit of **${plan['net_savings_usd']:,}** ({plan['risk_reduction_pct']}% risk reduction).")
+                if plan.get("shock_mode") == "unconfirmed":
+                    rng = plan.get("net_saving_range_usd", [0, 0])
+                    parts.append(
+                        f"🛡️ **Honest Ranking Under Unconfirmed Shock**: Because shock duration and affected zone are unconfirmed, "
+                        f"GasLine prioritizes **{plan['plan_name']}** (`{plan.get('honest_badge')}`), yielding an expected net saving of "
+                        f"**${plan['net_savings_usd']:,}** (range **${rng[0]:,.0f} to ${rng[1]:,.0f}**, max regret **${plan.get('max_regret_usd', 0):,.0f}**). "
+                        f"{plan.get('honest_guidance', '')}"
+                    )
+                else:
+                    parts.append(f"⚡ **Recommended Prescriptive Action**: Deploy **{plan['plan_name']}**. Action cost is **${plan['intervention_cost_usd']:,}**, avoiding **${plan['avoided_air_freight_usd']:,}** in penalties for a net benefit of **${plan['net_savings_usd']:,}** ({plan['risk_reduction_pct']}% risk reduction).")
+
+            if "quote_promise" in structured_metrics:
+                qp = structured_metrics["quote_promise"]
+                parts.append(
+                    f"📅 **Pre-PO Promise-Date Verdict**: Buyer's {qp['requested_lead_days']}-day target carries **{qp['on_time_confidence_pct']}%** on-time confidence ({qp['verdict']}). "
+                    f"Safe calendar promise tiers — **85%**: `{qp['safe_85_date']}`, **90% Conformal (Recommended)**: `{qp['safe_90_date']}` ({qp['safe_90_days']}d), **97% Bulletproof**: `{qp['safe_97_date']}`."
+                )
 
             if "port_buffer" in structured_metrics:
                 p = structured_metrics["port_buffer"]

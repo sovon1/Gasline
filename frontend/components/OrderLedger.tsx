@@ -28,6 +28,7 @@ export interface OrderItem {
   base_smv: number;
   penalty_per_day_usd: number;
   cancel_threshold_days: number;
+  created_date?: string;
   promised_ship_date: string;
   actual_completion_date?: string;
   lead_days: number;

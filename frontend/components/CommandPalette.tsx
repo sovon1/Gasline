@@ -121,10 +121,10 @@ export default function CommandPalette({
         id: "act-scan",
         section: "Quick Actions",
         label: "Scan Line Whiteboard / Dye Lot Ticket",
-        sublabel: "Optical OCR extraction to Model B inference",
-        badge: "Vision",
+        sublabel: "Tap-to-confirm template digitization to Model B inference",
+        badge: "Board",
         icon: <ScanLineIcon className="h-4 w-4 text-sky-500" />,
-        keywords: "vision ocr camera whiteboard ticket scan",
+        keywords: "vision camera whiteboard ticket scan tap confirm",
         onSelect: () => {
           onClose();
           onOpenVisionScan();
@@ -351,6 +351,7 @@ export default function CommandPalette({
   }, [filteredItems]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setActiveIndex((prev) => (filteredItems.length ? (prev + 1) % filteredItems.length : 0));
